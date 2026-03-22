@@ -39,7 +39,6 @@ section .bss
 
 section .text
 
-extern os_vtable
 
 ;; =============================================================================
 ;; proto_send_all — Write exactly N bytes to fd (handles partial writes)

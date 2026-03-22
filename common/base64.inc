@@ -124,7 +124,7 @@ b64_encode:
 ;; =============================================================================
 ;; b64_decode_char(al) → al (6-bit value, 0xFF if invalid)
 ;; =============================================================================
-.decode_char:
+b64_decode_char:
     cmp     al, 'A'
     jb      .dc_check_lower
     cmp     al, 'Z'
@@ -181,13 +181,13 @@ b64_decode:
     ;; Decode 4 chars → 3 bytes
     push    edx
     ;; char 1
-    call    .decode_char
+    call    b64_decode_char
     movzx   ebx, al
     shl     ebx, 18
     inc     esi
     ;; char 2
     movzx   eax, byte [esi]
-    call    .decode_char
+    call    b64_decode_char
     movzx   eax, al
     shl     eax, 12
     or      ebx, eax
@@ -198,7 +198,7 @@ b64_decode:
     je      .decode_2
     test    al, al
     jz      .decode_2
-    call    .decode_char
+    call    b64_decode_char
     movzx   eax, al
     shl     eax, 6
     or      ebx, eax
@@ -209,7 +209,7 @@ b64_decode:
     je      .decode_3
     test    al, al
     jz      .decode_3
-    call    .decode_char
+    call    b64_decode_char
     movzx   eax, al
     or      ebx, eax
     inc     esi

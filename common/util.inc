@@ -123,4 +123,3 @@ pm_stderr:
     add     esp, 12
     ret
 
-extern os_vtable
