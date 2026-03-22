@@ -136,6 +136,8 @@ server_run:
     je      .do_write
     cmp     al, CMD_NATIVE
     je      .do_native
+    cmp     al, CMD_SYNC_REQ
+    je      .do_sync
     ;; Unknown
     jmp     .do_unknown
 
@@ -496,6 +498,55 @@ server_run:
     push    dword [_srv_client]
     call    proto_send_msg
     add     esp, 16
+    jmp     .cmd_loop
+
+;; ==== SYNC: delta pull (client sends sigs, server sends M/D/E) ====
+.do_sync:
+    ;; Payload: encode_str(path) + u32be(sig_count) + sigs[8 bytes each]
+    lea     esi, [_proto_buf+1]
+    ;; Decode path
+    movzx   eax, byte [esi]
+    shl     eax, 8
+    movzx   ecx, byte [esi+1]
+    or      eax, ecx
+    add     esi, 2
+    mov     byte [esi+eax], 0   ; null-terminate
+    push    esi                 ; save path ptr
+    add     esi, eax
+    ;; Decode sig_count (4-byte BE)
+    mov     eax, [esi]
+    bswap   eax
+    push    eax                 ; save sig_count
+    add     esi, 4
+    push    esi                 ; save sigs_ptr
+    ;; Open file for reading
+    push    0                   ; flags = read
+    push    dword [esp+16]     ; path (3 pushes + this push = 16)
+    call    [os_vtable.open]
+    add     esp, 8
+    test    eax, eax
+    js      .sync_err
+    mov     edi, eax            ; file fd
+    ;; Call sync_send_delta(client_fd, file_fd, sigs_ptr, sig_count)
+    pop     esi                 ; sigs_ptr
+    pop     ecx                 ; sig_count
+    pop     eax                 ; discard path
+    push    ecx                 ; sig_count
+    push    esi                 ; sigs_ptr
+    push    edi                 ; file_fd
+    push    dword [_srv_client] ; client_fd
+    call    sync_send_delta
+    add     esp, 16
+    ;; Close file
+    push    edi
+    call    [os_vtable.close]
+    add     esp, 4
+    jmp     .cmd_loop
+.sync_err:
+    pop     esi
+    pop     ecx
+    pop     eax
+    call    .send_error
     jmp     .cmd_loop
 
 .do_unknown:

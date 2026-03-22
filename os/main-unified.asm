@@ -15,6 +15,7 @@ bits 32
 %include "../common/base64.inc"
 %include "../common/protobuf.inc"
 %include "../common/proto.inc"
+%include "../common/sync.inc"
 %include "../common/server.inc"
 
 section .data
