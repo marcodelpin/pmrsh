@@ -21,6 +21,7 @@ bits 32
 %include "../common/relay.inc"
 %include "../common/daemon.inc"
 %include "../common/selfupdate.inc"
+%include "../common/auth.inc"
 %include "../common/client.inc"
 %include "../common/server.inc"
 
@@ -277,7 +278,10 @@ _start:
 .ip_end:
     shl     eax, 8
     or      eax, ebx
-    ;; Shift produced big-endian (network order): "192.168.71.127" → 0xC0A84F7F
-    ;; sockaddr_in.sin_addr expects network order — no bswap needed
+    ;; Shift produced 0x7F000001 for "127.0.0.1" — this is host order
+    ;; sin_addr needs bytes [7F][00][00][01] in memory
+    ;; On little-endian x86, storing 0x7F000001 gives [01][00][00][7F] = wrong
+    ;; bswap → 0x0100007F → stores as [7F][00][00][01] = correct
+    bswap   eax
     pop     ebx
     ret

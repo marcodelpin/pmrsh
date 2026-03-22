@@ -27,6 +27,9 @@ client_run:
     mov     ebp, esp
     ; [ebp+20]=host_ip, [ebp+24]=port, [ebp+28]=cmd_name, [ebp+32]=cmd_arg
 
+    ;; Pre-load auth keys (before socket creation to avoid fd conflicts)
+    call    auth_load_or_gen
+
     ;; Create socket + connect
     call    [os_vtable.socket]
     test    eax, eax
@@ -41,42 +44,12 @@ client_run:
     test    eax, eax
     jnz     .conn_err
 
-    ;; Auth handshake (send AUTH_REQUEST, receive CHALLENGE, send RESPONSE, receive OK)
-    ;; Simplified: send minimal AUTH_REQUEST, accept any response
-    push    49
-    push    _srv_infobuf        ; reuse as zero-filled buffer
-    push    byte CMD_AUTH_REQUEST
+    ;; Auth handshake (Ed25519)
     push    dword [_cli_fd]
-    call    proto_send_msg
-    add     esp, 16
-
-    ;; Recv challenge
-    push    dword [_cli_fd]
-    call    proto_recv_msg
+    call    auth_client_handshake
     add     esp, 4
     test    eax, eax
-    jle     .auth_err
-
-    ;; Send response (64 zero bytes — no real signing yet)
-    lea     edi, [_srv_infobuf]
-    xor     al, al
-    mov     ecx, 64
-    rep stosb
-    push    64
-    push    _srv_infobuf
-    push    byte CMD_AUTH_RESPONSE
-    push    dword [_cli_fd]
-    call    proto_send_msg
-    add     esp, 16
-
-    ;; Recv AUTH_OK
-    push    dword [_cli_fd]
-    call    proto_recv_msg
-    add     esp, 4
-    test    eax, eax
-    jle     .auth_err
-    cmp     byte [_proto_buf], CMD_AUTH_OK
-    jne     .auth_err
+    jnz     .auth_err
 
     ;; Dispatch command
     mov     esi, [ebp+28]       ; cmd_name

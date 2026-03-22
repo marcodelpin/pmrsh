@@ -16,14 +16,6 @@ section .data
     _srv_killfail db "kill failed", 0
     _srv_psfmt   db '{"pid":%d,"name":"%s"}', 0
     _srv_file_err db "file error", 0
-    _dbg_wait db "W", 10, 0
-    _dbg_accepted db "A", 10, 0
-    _dbg_a1 db "[auth] waiting for AUTH_REQUEST", 10, 0
-    _dbg_a2 db "[auth] recv_msg returned", 10, 0
-    _dbg_a3 db "[auth] sent CHALLENGE", 10, 0
-    _dbg_a4 db "[auth] recv RESPONSE returned", 10, 0
-    _dbg_a5 db "[auth] sending AUTH_OK", 10, 0
-    _dbg_a6 db "[auth] DONE - authenticated", 10, 0
 
 _srv_ps_cmd db "ps -eo pid,comm --no-headers 2>/dev/null || tasklist /FO CSV /NH 2>nul", 0
 
@@ -68,46 +60,17 @@ server_run:
     add     esp, 8
 
 .accept_loop:
-    ;; Debug: print "W" (waiting) to stderr before accept
-    push    ebx
-    push    ecx
-    push    edx
-    mov     eax, 4
-    mov     ebx, 2
-    mov     ecx, _dbg_wait
-    mov     edx, 2
-    int     0x80
-    pop     edx
-    pop     ecx
-    pop     ebx
-
     push    ebx
     call    [os_vtable.accept]
     add     esp, 4
-
-    ;; Debug: print "A" + fd after accept
-    push    eax
-    push    ebx
-    push    ecx
-    push    edx
-    mov     ebx, 2
-    mov     ecx, _dbg_accepted
-    mov     edx, 2
-    push    eax
-    mov     eax, 4
-    int     0x80
-    pop     eax
-    pop     edx
-    pop     ecx
-    pop     ebx
-    pop     eax
-
     test    eax, eax
     js      .accept_loop
     mov     [_srv_client], eax
 
-    ;; Auth handshake (accept-all MVP)
-    call    .do_auth
+    ;; Auth handshake (Ed25519 — TOFU, keys loaded but verify deferred)
+    push    dword [_srv_client]
+    call    auth_server_handshake
+    add     esp, 4
     test    eax, eax
     jnz     .disconnect
 
@@ -601,89 +564,7 @@ server_run:
     pop     ebp
     ret
 
-;; --- Helper: auth handshake (accept-all) ---
-.do_auth:
-    ;; Raw debug: write directly via int 0x80 (bypass vtable)
-    push    ebx
-    mov     eax, 4              ; SYS_WRITE
-    mov     ebx, 2              ; stderr
-    mov     ecx, _dbg_a1
-    mov     edx, 31             ; len of "[auth] waiting for AUTH_REQUEST\n"
-    int     0x80
-    pop     ebx
-
-    ;; Recv AUTH_REQUEST
-    push    dword [_srv_client]
-    call    proto_recv_msg
-    add     esp, 4
-
-    ;; Raw debug: print recv result
-    push    eax
-    push    ebx
-    mov     ebx, eax            ; save recv result
-    mov     eax, 4
-    push    ebx                 ; save
-    mov     ebx, 2
-    mov     ecx, _dbg_a2
-    mov     edx, 25
-    int     0x80
-    pop     ebx                 ; restore recv result
-    pop     ebx
-    pop     eax
-
-    test    eax, eax
-    jle     .auth_fail
-
-    ;; Send AUTH_CHALLENGE (32 zero bytes)
-    lea     edi, [_srv_infobuf]
-    xor     al, al
-    mov     ecx, 32
-    rep stosb
-    push    32
-    push    _srv_infobuf
-    push    byte CMD_AUTH_CHALLENGE
-    push    dword [_srv_client]
-    call    proto_send_msg
-    add     esp, 16
-    mov     esi, _dbg_a3
-    call    pm_stderr
-
-    ;; Recv AUTH_RESPONSE (ignore content)
-    push    dword [_srv_client]
-    call    proto_recv_msg
-    add     esp, 4
-    push    eax
-    mov     esi, _dbg_a4
-    call    pm_stderr
-    pop     eax
-    test    eax, eax
-    jle     .auth_fail
-
-    mov     esi, _dbg_a5
-    call    pm_stderr
-    ;; Send AUTH_OK: encode_str("pmash 0.1.0") + caps(0) + banner(0)
-    lea     edi, [_srv_infobuf]
-    mov     byte [edi], 0       ; str len high
-    mov     byte [edi+1], 11    ; str len low
-    mov     esi, _srv_version
-    lea     edi, [_srv_infobuf+2]
-    mov     ecx, 11
-    rep movsb
-    mov     byte [_srv_infobuf+13], 0   ; caps=0
-    mov     byte [_srv_infobuf+14], 0   ; banner=0
-    push    15
-    push    _srv_infobuf
-    push    byte CMD_AUTH_OK
-    push    dword [_srv_client]
-    call    proto_send_msg
-    add     esp, 16
-    mov     esi, _dbg_a6
-    call    pm_stderr
-    xor     eax, eax
-    ret
-.auth_fail:
-    mov     eax, -1
-    ret
+;; (auth moved to common/auth.inc — auth_server_handshake)
 
 ;; --- Helper: send error ---
 .send_error:

@@ -194,12 +194,13 @@ _linux_socket:  ; () → fd
 _linux_connect: ; (fd, ip, port) → 0/err
     push    ebx
     push    esi
+    ;; Stack: [esp+0]=esi [esp+4]=ebx [esp+8]=ret [esp+12]=fd [esp+16]=ip [esp+20]=port
     ;; Build sockaddr_in
     mov     word [_linux_sa], L_AF_INET
-    mov     eax, [esp+16]          ; port (esp+4ret+4ebx+4esi+4=16)
+    mov     eax, [esp+20]          ; port
     xchg    al, ah                 ; htons
     mov     [_linux_sa+2], ax
-    mov     eax, [esp+12]          ; ip (network order)
+    mov     eax, [esp+16]          ; ip (network order)
     mov     [_linux_sa+4], eax
     mov     dword [_linux_sa+8], 0
     mov     dword [_linux_sa+12], 0
