@@ -16,6 +16,8 @@ bits 32
 %include "../common/protobuf.inc"
 %include "../common/proto.inc"
 %include "../common/sync.inc"
+%include "../common/shell.inc"
+%include "../common/proxy.inc"
 %include "../common/server.inc"
 
 section .data

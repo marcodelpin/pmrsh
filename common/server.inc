@@ -138,6 +138,10 @@ server_run:
     je      .do_native
     cmp     al, CMD_SYNC_REQ
     je      .do_sync
+    cmp     al, CMD_SHELL_REQ
+    je      .do_shell
+    cmp     al, CMD_PROXY_CONNECT
+    je      .do_proxy
     ;; Unknown
     jmp     .do_unknown
 
@@ -547,6 +551,20 @@ server_run:
     pop     ecx
     pop     eax
     call    .send_error
+    jmp     .cmd_loop
+
+;; ==== PROXY: tunnel through this host to target ====
+.do_proxy:
+    push    dword [_srv_client]
+    call    proxy_handle
+    add     esp, 4
+    jmp     .disconnect          ; tunnel done
+
+;; ==== SHELL: interactive command session ====
+.do_shell:
+    push    dword [_srv_client]
+    call    shell_handle
+    add     esp, 4
     jmp     .cmd_loop
 
 .do_unknown:
