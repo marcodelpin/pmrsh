@@ -50,6 +50,7 @@ L_SO_REUSEADDR  equ 2
 ;; Open flags
 L_O_RDONLY      equ 0
 L_O_WRONLY      equ 1
+L_O_RDWR        equ 2
 L_O_CREAT       equ 64
 L_O_TRUNC       equ 512
 

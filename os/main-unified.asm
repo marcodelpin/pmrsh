@@ -19,15 +19,18 @@ bits 32
 %include "../common/shell.inc"
 %include "../common/proxy.inc"
 %include "../common/relay.inc"
+%include "../common/daemon.inc"
 %include "../common/server.inc"
 
 section .data
     ver_str     db "pmash 0.1.0 (unified)", 10, 0
     usage_str   db "Usage: pmash --listen <port>", 10
+                db "       pmash --daemon <port>", 10
                 db "       pmash --version", 10, 0
     flag_ver    db "--version", 0
     flag_listen db "--listen", 0
-    err_noport  db "Error: --listen requires port", 10, 0
+    flag_daemon db "--daemon", 0
+    err_noport  db "Error: --listen/--daemon requires port", 10, 0
 
 section .text
     global _start
@@ -63,13 +66,35 @@ _start:
     test    eax, eax
     jz      .do_listen
 
+    ;; Check --daemon
+    push    edi
+    mov     esi, flag_daemon
+    call    .strcmp
+    pop     edi
+    test    eax, eax
+    jz      .do_daemon
+
     jmp     .show_usage
+
+.do_daemon:
+    cmp     ecx, 3
+    jl      .err_port
+    ;; Save argv base + argc before daemonize (fork clobbers regs)
+    push    ecx                 ; save argc
+    push    dword [esp+12]      ; save argv[2] ptr (esp+4=argc + esp+8=argv2)
+    call    daemonize
+    pop     esi                 ; restore argv[2]
+    pop     ecx                 ; restore argc
+    call    pm_atoi             ; esi already points to port string
+    push    eax
+    call    server_run
+    ;; noreturn
 
 .do_listen:
     cmp     ecx, 3
     jl      .err_port
     ;; argv[2] = port
-    mov     esi, [esp+8]        ; argv[2] — esp is argv base, +0=prog, +4=argv1, +8=argv2
+    mov     esi, [esp+8]        ; argv[2]
     call    pm_atoi
     push    eax
     call    server_run
