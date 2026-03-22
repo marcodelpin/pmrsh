@@ -20,6 +20,7 @@ bits 32
 %include "../common/proxy.inc"
 %include "../common/relay.inc"
 %include "../common/daemon.inc"
+%include "../common/selfupdate.inc"
 %include "../common/client.inc"
 %include "../common/server.inc"
 
