@@ -150,6 +150,7 @@ proto_send_msg:
 .send:
     ;; Total message size = 1 + payload_len
     lea     eax, [edx+1]
+    push    eax                 ; save total msg size (edx clobbered by send_all)
 
     ;; Write 4-byte BE length header
     bswap   eax
@@ -160,10 +161,10 @@ proto_send_msg:
     call    proto_send_all
     add     esp, 12
     test    eax, eax
-    jnz     .fail
+    jnz     .fail2
 
     ;; Write message body
-    lea     eax, [edx+1]
+    pop     eax                 ; restore total msg size
     push    eax
     push    _proto_buf
     push    ebx
@@ -173,6 +174,8 @@ proto_send_msg:
     pop     esi
     pop     ebx
     ret
+.fail2:
+    pop     eax                 ; discard saved msg size
 .fail:
     mov     eax, -1
     pop     esi
