@@ -32,28 +32,29 @@ server_run:
     push    rbx
     push    r12
     push    r13
+    push    r14
     mov     r12d, edi              ; port
 
     ;; Create socket
     call    [os_vtable.socket]
     test    eax, eax
     js      .fail
-    mov     ebx, eax               ; listen fd
+    mov     r14d, eax              ; listen fd (callee-saved, survives all handlers)
 
     ;; Bind
-    mov     edi, ebx
+    mov     edi, r14d
     mov     esi, r12d
     call    [os_vtable.bind]
     test    eax, eax
     jnz     .close_listen
 
     ;; Listen
-    mov     edi, ebx
+    mov     edi, r14d
     mov     esi, 5
     call    [os_vtable.listen]
 
 .accept_loop:
-    mov     edi, ebx
+    mov     edi, r14d
     call    [os_vtable.accept]
     test    eax, eax
     js      .accept_loop
@@ -374,13 +375,16 @@ server_run:
     jge     .kill_ok
     lea     rsi, [_srv_killfail]
 .kill_ok:
+    ;; rsi = result string ptr
+    push    rsi                    ; save string ptr
     mov     rdi, rsi
     call    pm_strlen
+    mov     ecx, eax               ; len
+    pop     rdx                    ; string ptr
     mov     edi, [_srv_client]
     mov     sil, CMD_NATIVE_RESP
-    mov     rdx, rdi               ; BUG: rdi was clobbered by pm_strlen
-    ;; Fix: save string ptr before strlen
-    jmp     .cmd_loop              ; simplified for now
+    call    proto_send_msg
+    jmp     .cmd_loop
 
 ;; ==== SYNC ====
 .do_sync:
@@ -449,9 +453,10 @@ server_run:
     jmp     .accept_loop
 
 .close_listen:
-    mov     edi, ebx
+    mov     edi, r14d
     call    [os_vtable.closesock]
 .fail:
+    pop     r14
     pop     r13
     pop     r12
     pop     rbx

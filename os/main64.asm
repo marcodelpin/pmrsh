@@ -20,6 +20,7 @@ default rel
 %include "../common64/shell.inc"
 %include "../common64/proxy.inc"
 %include "../common64/relay.inc"
+%include "../common64/compress.inc"
 %include "../common64/daemon.inc"
 %include "../common64/selfupdate.inc"
 %include "../common64/auth.inc"
