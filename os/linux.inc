@@ -28,14 +28,17 @@ SYS32_FSTAT     equ 108
 SYS32_MMAP2     equ 192
 SYS32_MUNMAP    equ 91
 SYS32_NANOSLEEP equ 162
-SYS32_SOCKET    equ 359
-SYS32_CONNECT   equ 362
-SYS32_BIND      equ 361
-SYS32_LISTEN    equ 363
-SYS32_ACCEPT    equ 364
-SYS32_SEND      equ 369
-SYS32_RECV      equ 372
-SYS32_SETSOCKOPT equ 366
+;; On i386, all socket calls go through socketcall(102) multiplexer
+SYS32_SOCKETCALL equ 102
+;; socketcall subcall numbers
+SC_SOCKET       equ 1
+SC_BIND         equ 2
+SC_CONNECT      equ 3
+SC_LISTEN       equ 4
+SC_ACCEPT       equ 5
+SC_SEND         equ 9
+SC_RECV         equ 10
+SC_SETSOCKOPT   equ 14
 SYS32_GETHOSTNAME equ 74
 
 ;; Socket constants
@@ -168,13 +171,22 @@ _linux_mkdir:   ; (path) → 0/err
 
 ;; --- Network ---
 
+;; =============================================================================
+;; socketcall-based implementations (i386 ABI)
+;; socketcall(102): ebx=subcall, ecx=ptr_to_args
+;; =============================================================================
+
 _linux_socket:  ; () → fd
     push    ebx
-    mov     eax, SYS32_SOCKET
-    mov     ebx, L_AF_INET
-    mov     ecx, L_SOCK_STREAM
-    xor     edx, edx
+    sub     esp, 12
+    mov     dword [esp], L_AF_INET      ; domain
+    mov     dword [esp+4], L_SOCK_STREAM ; type
+    mov     dword [esp+8], 0             ; protocol
+    mov     eax, SYS32_SOCKETCALL
+    mov     ebx, SC_SOCKET
+    mov     ecx, esp
     int     0x80
+    add     esp, 12
     pop     ebx
     ret
 
@@ -183,77 +195,100 @@ _linux_connect: ; (fd, ip, port) → 0/err
     push    esi
     ;; Build sockaddr_in
     mov     word [_linux_sa], L_AF_INET
-    mov     eax, [esp+16]          ; port
+    mov     eax, [esp+16]          ; port (esp+4ret+4ebx+4esi+4=16)
     xchg    al, ah                 ; htons
     mov     [_linux_sa+2], ax
     mov     eax, [esp+12]          ; ip (network order)
     mov     [_linux_sa+4], eax
-    xor     eax, eax
-    mov     [_linux_sa+8], eax
-    mov     [_linux_sa+12], eax
-    ;; connect(fd, &sa, 16)
-    mov     eax, SYS32_CONNECT
-    mov     ebx, [esp+8]          ; fd (adjusted for pushes: +8 base +8 pushes = 16? no)
-    ;; Stack: ret, ebx_saved, esi_saved, ret_addr, fd, ip, port
-    ;; fd is at esp+12 after 2 pushes
-    mov     ebx, [esp+12]
-    mov     ecx, _linux_sa
-    mov     edx, 16
+    mov     dword [_linux_sa+8], 0
+    mov     dword [_linux_sa+12], 0
+    ;; socketcall(SC_CONNECT, [fd, &sa, 16])
+    sub     esp, 12
+    mov     eax, [esp+24]          ; fd (12+4esi+4ebx+4ret=24)
+    mov     [esp], eax
+    mov     dword [esp+4], _linux_sa
+    mov     dword [esp+8], 16
+    mov     eax, SYS32_SOCKETCALL
+    mov     ebx, SC_CONNECT
+    mov     ecx, esp
     int     0x80
+    add     esp, 12
     pop     esi
     pop     ebx
     ret
 
 _linux_bind:    ; (fd, port) → 0/err
     push    ebx
+    push    esi
     mov     word [_linux_sa], L_AF_INET
-    mov     eax, [esp+12]          ; port
+    mov     eax, [esp+16]          ; port
     xchg    al, ah
     mov     [_linux_sa+2], ax
     mov     dword [_linux_sa+4], 0  ; INADDR_ANY
     mov     dword [_linux_sa+8], 0
     mov     dword [_linux_sa+12], 0
-    ;; Set SO_REUSEADDR
-    push    1                       ; optval = 1
-    mov     eax, SYS32_SETSOCKOPT
-    mov     ebx, [esp+12]          ; fd
-    mov     ecx, L_SOL_SOCKET
-    mov     edx, L_SO_REUSEADDR
-    mov     esi, esp               ; &optval
-    mov     edi, 4
+    ;; setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &1, 4)
+    sub     esp, 24
+    mov     eax, [esp+36]          ; fd (24+4esi+4ebx+4ret=36)
+    mov     [esp], eax
+    mov     dword [esp+4], L_SOL_SOCKET
+    mov     dword [esp+8], L_SO_REUSEADDR
+    mov     dword [esp+20], 1      ; optval=1 (at end of args block)
+    lea     eax, [esp+20]
+    mov     [esp+12], eax           ; &optval
+    mov     dword [esp+16], 4       ; optlen
+    mov     eax, SYS32_SOCKETCALL
+    mov     ebx, SC_SETSOCKOPT
+    mov     ecx, esp
     int     0x80
-    pop     eax                    ; discard optval
-    ;; bind
-    mov     eax, SYS32_BIND
-    mov     ebx, [esp+8]
-    mov     ecx, _linux_sa
-    mov     edx, 16
+    ;; bind(fd, &sa, 16)
+    mov     eax, [esp+36]          ; fd
+    mov     [esp], eax
+    mov     dword [esp+4], _linux_sa
+    mov     dword [esp+8], 16
+    mov     eax, SYS32_SOCKETCALL
+    mov     ebx, SC_BIND
+    mov     ecx, esp
     int     0x80
+    add     esp, 24
+    pop     esi
     pop     ebx
     ret
 
 _linux_listen:  ; (fd, backlog) → 0/err
     push    ebx
-    mov     eax, SYS32_LISTEN
-    mov     ebx, [esp+8]
-    mov     ecx, [esp+12]
+    sub     esp, 8
+    mov     eax, [esp+16]          ; fd (8+4ebx+4ret=16)
+    mov     [esp], eax
+    mov     eax, [esp+20]          ; backlog
+    mov     [esp+4], eax
+    mov     eax, SYS32_SOCKETCALL
+    mov     ebx, SC_LISTEN
+    mov     ecx, esp
     int     0x80
+    add     esp, 8
     pop     ebx
     ret
 
 _linux_accept:  ; (fd) → new_fd
     push    ebx
-    mov     eax, SYS32_ACCEPT
-    mov     ebx, [esp+8]
-    xor     ecx, ecx               ; addr = NULL
-    xor     edx, edx               ; addrlen = NULL
+    sub     esp, 12
+    mov     eax, [esp+20]          ; fd (12+4ebx+4ret=20)
+    mov     [esp], eax
+    mov     dword [esp+4], 0        ; addr = NULL
+    mov     dword [esp+8], 0        ; addrlen = NULL
+    mov     eax, SYS32_SOCKETCALL
+    mov     ebx, SC_ACCEPT
+    mov     ecx, esp
     int     0x80
+    add     esp, 12
     pop     ebx
     ret
 
 _linux_send:    ; (fd, buf, len) → bytes
+    ;; For TCP, write() works fine and is simpler
     push    ebx
-    mov     eax, SYS32_WRITE       ; send = write for TCP
+    mov     eax, SYS32_WRITE
     mov     ebx, [esp+8]
     mov     ecx, [esp+12]
     mov     edx, [esp+16]
@@ -262,8 +297,9 @@ _linux_send:    ; (fd, buf, len) → bytes
     ret
 
 _linux_recv:    ; (fd, buf, len) → bytes
+    ;; For TCP, read() works fine
     push    ebx
-    mov     eax, SYS32_READ        ; recv = read for TCP
+    mov     eax, SYS32_READ
     mov     ebx, [esp+8]
     mov     ecx, [esp+12]
     mov     edx, [esp+16]

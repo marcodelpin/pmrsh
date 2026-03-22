@@ -87,10 +87,11 @@ proto_recv_all:
     push    ebx
     push    esi
     push    edi
-    mov     edi, [esp+16]       ; fd
-    mov     esi, [esp+20]       ; buf
-    mov     ebx, [esp+24]       ; len
-    xor     ecx, ecx            ; total
+    push    ebp                 ; use ebp as total counter (preserved across calls)
+    mov     edi, [esp+20]       ; fd (ret+4 pushes = 20)
+    mov     esi, [esp+24]       ; buf
+    mov     ebx, [esp+28]       ; len
+    xor     ebp, ebp            ; total read
 .loop:
     test    ebx, ebx
     jle     .done
@@ -102,17 +103,19 @@ proto_recv_all:
     test    eax, eax
     jle     .done_partial
     add     esi, eax
-    add     ecx, eax
+    add     ebp, eax
     sub     ebx, eax
     jmp     .loop
 .done:
-    mov     eax, ecx
+    mov     eax, ebp
+    pop     ebp
     pop     edi
     pop     esi
     pop     ebx
     ret
 .done_partial:
-    mov     eax, ecx
+    mov     eax, ebp
+    pop     ebp
     pop     edi
     pop     esi
     pop     ebx
