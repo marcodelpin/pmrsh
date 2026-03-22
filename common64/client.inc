@@ -29,9 +29,12 @@ section .data
     _cmd_write    db "write", 0
     _cmd_shell    db "shell", 0
     _cmd_sync     db "sync", 0
+    _cmd_syncpush db "sync-push", 0
     _cmd_version  db "version", 0
     _cmd_selfupd  db "self-update", 0
     _cmd_ls       db "ls", 0
+    _sync_tmp_path db "/tmp/.pmash_sync.tmp", 0
+    _cli_syncpush_ok db "sync-push complete", 10, 0
 
 section .bss
     _cli_fd       resd 1
@@ -147,6 +150,13 @@ client_run:
     call    .cmdcmp
     test    eax, eax
     jz      .cmd_sync
+
+    ;; "sync-push"
+    mov     rdi, r14
+    lea     rsi, [_cmd_syncpush]
+    call    .cmdcmp
+    test    eax, eax
+    jz      .cmd_sync_push
 
     ;; "ls" → exec "ls <arg>"
     mov     rdi, r14
@@ -572,9 +582,9 @@ client_run:
     call    [os_vtable.write]
     jmp     .done
 
-;; ===================== SYNC =====================
+;; ===================== SYNC (delta pull) =====================
 .cmd_sync:
-    ;; sync <remote_path> — delta pull
+    ;; sync <remote_path> — delta pull from server
     test    r15, r15
     jz      .noarg_err
     ;; Open local file for reading to compute signatures
@@ -583,22 +593,26 @@ client_run:
     call    [os_vtable.open]
     test    eax, eax
     js      .sync_fresh            ; file doesn't exist → fresh pull
-    mov     ebx, eax               ; file fd
+    mov     ebx, eax               ; local_read_fd
     ;; Compute block signatures
     mov     edi, ebx
     call    sync_compute_sigs
     push    rax                    ; save block count
+    ;; Seek back to start (for M block reads later)
     mov     edi, ebx
-    call    [os_vtable.close]
+    xor     esi, esi
+    xor     edx, edx               ; SEEK_SET
+    call    [os_vtable.seek]
     pop     rcx                    ; block count
+
     ;; Build SYNC_REQ: encode_str(path) + u32be(sig_count) + sigs
+    push    rbx                    ; save local_read_fd
     push    r15
     mov     rdi, r15
     call    pm_strlen
     pop     r15
     mov     r8d, eax               ; path length
     lea     rdi, [_srv_infobuf]
-    ;; encode_str
     mov     eax, r8d
     shr     eax, 8
     mov     [rdi], al
@@ -616,7 +630,7 @@ client_run:
     add     rdi, 4
     ;; Copy signatures (8 bytes each)
     push    rcx
-    shl     ecx, 3                 ; * 8
+    shl     ecx, 3
     lea     rsi, [_sync_sigbuf]
     rep movsb
     pop     rcx
@@ -628,14 +642,140 @@ client_run:
     mov     sil, CMD_SYNC_REQ
     lea     rdx, [_srv_infobuf]
     call    proto_send_msg
-    ;; Receive M/D/E responses (simplified: just print status)
+
+    ;; Open temp output file for reconstructed content
+    lea     rdi, [_sync_tmp_path]
+    mov     esi, 1                 ; write
+    call    [os_vtable.open]
+    test    eax, eax
+    js      .sync_apply_fail
+    push    rax                    ; save output_fd
+
+    ;; Apply delta: server_fd, local_read_fd, output_fd
+    pop     rdx                    ; output_fd
+    push    rdx                    ; keep on stack
+    pop     r8                     ; output_fd in r8 temporarily
+    pop     rbx                    ; local_read_fd
+    push    r8                     ; output_fd back on stack
+    mov     edi, [_cli_fd]         ; server_fd
+    mov     esi, ebx               ; local_read_fd
+    mov     edx, r8d               ; output_fd
+    call    sync_apply_delta
+
+    ;; Close both files
+    pop     r8                     ; output_fd
+    push    rax                    ; save result
+    mov     edi, ebx               ; close local_read_fd
+    call    [os_vtable.close]
+    mov     edi, r8d               ; close output_fd
+    call    [os_vtable.close]
+
+    pop     rax                    ; delta apply result
+    test    eax, eax
+    jnz     .sync_apply_fail
+
+    ;; Rename temp → original (atomic replace)
+    lea     rdi, [_sync_tmp_path]
+    mov     rsi, r15
+    call    [os_vtable.rename]
+
     lea     rdi, [_cli_sync_ok]
     call    pm_stdout
+    jmp     .done
+
+.sync_apply_fail:
+    ;; Clean up temp file
+    lea     rdi, [_sync_tmp_path]
+    call    [os_vtable.unlink]
+    lea     rdi, [_cli_push_fail]
+    call    pm_stderr
     jmp     .done
 
 .sync_fresh:
     ;; File doesn't exist — do a regular pull instead
     jmp     .cmd_pull
+
+;; ===================== SYNC-PUSH (delta push to server) =====================
+.cmd_sync_push:
+    ;; sync-push <local_path> — push local file delta to server
+    test    r15, r15
+    jz      .noarg_err
+
+    ;; Send SYNC_PUSH_REQ with path
+    push    r15
+    mov     rdi, r15
+    call    pm_strlen
+    pop     r15
+    mov     ecx, eax
+    lea     rdi, [_srv_infobuf]
+    mov     eax, ecx
+    shr     eax, 8
+    mov     [rdi], al
+    mov     [rdi+1], cl
+    add     rdi, 2
+    mov     rsi, r15
+    push    rcx
+    rep movsb
+    pop     rcx
+    add     ecx, 2
+    mov     edi, [_cli_fd]
+    mov     sil, CMD_SYNC_PUSH_REQ
+    lea     rdx, [_srv_infobuf]
+    call    proto_send_msg
+
+    ;; Receive SYNC_PUSH_SIGS from server (server's block sigs)
+    mov     edi, [_cli_fd]
+    call    proto_recv_msg
+    test    eax, eax
+    jle     .sp_cli_fail
+    cmp     byte [_proto_buf], CMD_SYNC_PUSH_SIGS
+    jne     .sp_cli_fail
+
+    ;; Parse sig_count + sigs from response
+    mov     eax, [_proto_buf+1]
+    bswap   eax                    ; sig_count
+    mov     r8d, eax               ; save sig_count
+    ;; Sigs start at _proto_buf+5
+    ;; Copy to _sync_sigbuf for sync_send_delta
+    mov     ecx, r8d
+    shl     ecx, 3                 ; * 8
+    lea     rdi, [_sync_sigbuf]
+    lea     rsi, [_proto_buf+5]
+    rep movsb
+
+    ;; Open local file for reading
+    mov     rdi, r15
+    xor     esi, esi
+    call    [os_vtable.open]
+    test    eax, eax
+    js      .sp_cli_fail
+    mov     ebx, eax               ; local file fd
+
+    ;; Send delta: reads local blocks, compares with server sigs, sends M/D/E
+    mov     edi, [_cli_fd]         ; send to server
+    mov     esi, ebx               ; local file fd
+    lea     rdx, [_sync_sigbuf]    ; server's sigs
+    mov     ecx, r8d               ; sig count
+    call    sync_send_delta
+
+    ;; Close local file
+    mov     edi, ebx
+    call    [os_vtable.close]
+
+    ;; Wait for SYNC_PUSH_OK
+    mov     edi, [_cli_fd]
+    call    proto_recv_msg
+    test    eax, eax
+    jle     .sp_cli_fail
+
+    lea     rdi, [_cli_syncpush_ok]
+    call    pm_stdout
+    jmp     .done
+
+.sp_cli_fail:
+    lea     rdi, [_cli_push_fail]
+    call    pm_stderr
+    jmp     .done
 
 ;; ===================== LS =====================
 .cmd_ls:

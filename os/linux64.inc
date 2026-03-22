@@ -59,6 +59,9 @@ L_O_TRUNC       equ 512
 STAT64_SIZE_OFF equ 48
 STAT64_STRUCT_SZ equ 144
 
+EXEC_TIMEOUT_SECS equ 30           ; default exec timeout (seconds)
+WNOHANG equ 1
+
 section .bss
     _linux_stat_buf resb STAT64_STRUCT_SZ
     _linux_sa       resb 16         ; sockaddr_in
@@ -67,6 +70,7 @@ section .bss
     _linux_brk_base resq 1          ; heap base
     _linux_brk_cur  resq 1          ; current brk
     _linux_uname    resb 390        ; struct utsname (65*6)
+    _linux_poll_ts  resb 16         ; timespec for poll sleep
 
 section .data
     _linux_sh_path  db "/bin/sh", 0
@@ -240,11 +244,15 @@ _linux_recv:    ; (rdi=fd, rsi=buf, rdx=len) → rax=bytes
 
 ;; --- Process ---
 
+SYS64_POLL equ 7
+POLLIN equ 1
+
 _linux_exec:    ; (rdi=cmd, rsi=outbuf, rdx=outbufsize) → rax=output_len
     push    rbx
     push    r12
     push    r13
     push    r14
+    push    r15
     mov     r12, rdi               ; cmd
     mov     r13, rsi               ; outbuf
     mov     r14d, edx              ; outbufsize
@@ -265,33 +273,70 @@ _linux_exec:    ; (rdi=cmd, rsi=outbuf, rdx=outbufsize) → rax=output_len
     jz      .exec_child
 
     ;; --- Parent ---
+    mov     r15d, eax              ; child pid
     ;; Close write end
     mov     edi, [rsp+4]
     mov     eax, SYS64_CLOSE
     syscall
 
-    ;; Read output
+    ;; Read output with timeout using poll()
     xor     ebx, ebx               ; total read
-.exec_read:
-    mov     edi, [rsp]             ; read fd
-    lea     rsi, [r13+rbx]        ; outbuf + total
+    mov     ecx, EXEC_TIMEOUT_SECS
+    imul    ecx, 10                ; iterations (100ms each = 30s total)
+    push    rcx                    ; timeout counter
+
+.exec_poll:
+    ;; poll({fd, POLLIN}, 1, 100ms)
+    sub     rsp, 8                 ; struct pollfd: fd(4) + events(2) + revents(2)
+    mov     eax, [rsp+16]          ; read fd (pipefd[0]: +8 pollfd +8 timeout_counter)
+    mov     [rsp], eax             ; pollfd.fd
+    mov     word [rsp+4], POLLIN   ; events
+    mov     word [rsp+6], 0        ; revents
+    lea     rdi, [rsp]             ; fds
+    mov     esi, 1                 ; nfds
+    mov     edx, 100               ; timeout_ms = 100ms
+    mov     eax, SYS64_POLL
+    syscall
+    add     rsp, 8
+    ;; poll returns: >0 = events ready, 0 = timeout, <0 = error
+    test    eax, eax
+    jle     .exec_poll_timeout     ; no data or error
+
+    ;; Data available — read
+    mov     edi, [rsp+8]           ; read fd (pipefd[0])
+    lea     rsi, [r13+rbx]
     mov     edx, 65536
     sub     edx, ebx
     jle     .exec_read_done
     mov     eax, SYS64_READ
     syscall
     test    eax, eax
-    jle     .exec_read_done
+    jle     .exec_read_done        ; EOF or error
     add     ebx, eax
-    jmp     .exec_read
+    ;; Reset timeout counter (data flowing)
+    mov     qword [rsp], EXEC_TIMEOUT_SECS * 10
+    jmp     .exec_poll
+
+.exec_poll_timeout:
+    ;; Decrement counter
+    dec     qword [rsp]
+    cmp     qword [rsp], 0
+    jg      .exec_poll
+
+    ;; Timeout! Kill child
+    mov     edi, r15d              ; child pid
+    mov     esi, 9                 ; SIGKILL
+    mov     eax, SYS64_KILL
+    syscall
 
 .exec_read_done:
+    add     rsp, 8                 ; pop timeout counter
     ;; Close read end
     mov     edi, [rsp]
     mov     eax, SYS64_CLOSE
     syscall
-    ;; Wait for child
-    mov     edi, -1                ; pid = -1 (any child)
+    ;; Wait for child (reap zombie)
+    mov     edi, r15d              ; child pid
     xor     esi, esi               ; status ptr
     xor     edx, edx               ; options
     xor     r10d, r10d             ; rusage
@@ -301,6 +346,7 @@ _linux_exec:    ; (rdi=cmd, rsi=outbuf, rdx=outbufsize) → rax=output_len
     mov     byte [r13+rbx], 0
     mov     eax, ebx
     add     rsp, 16
+    pop     r15
     pop     r14
     pop     r13
     pop     r12
@@ -355,6 +401,7 @@ _linux_exec:    ; (rdi=cmd, rsi=outbuf, rdx=outbufsize) → rax=output_len
 .exec_fail:
     mov     rax, -1
     add     rsp, 16
+    pop     r15
     pop     r14
     pop     r13
     pop     r12

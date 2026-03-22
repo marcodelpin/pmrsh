@@ -8,8 +8,12 @@ DELTA_MATCH     equ 'M'
 DELTA_DATA      equ 'D'
 DELTA_END       equ 'E'
 
-CMD_SYNC_REQ    equ 0x90
-CMD_SYNC_RESP   equ 0x91
+CMD_SYNC_REQ      equ 0x90
+CMD_SYNC_RESP     equ 0x91
+CMD_SYNC_PUSH_REQ equ 0x92   ; client→server: "I want to push delta for <path>"
+CMD_SYNC_PUSH_SIGS equ 0x93  ; server→client: here are my block sigs
+CMD_SYNC_PUSH_DATA equ 0x94  ; client→server: M/D/E delta stream
+CMD_SYNC_PUSH_OK  equ 0x95   ; server→client: push applied
 
 section .bss
     _sync_blockbuf resb SYNC_BLOCK_SIZE
@@ -153,3 +157,111 @@ sync_send_delta:
     pop     r12
     pop     rbx
     ret
+
+;; =============================================================================
+;; sync_apply_delta — Client-side: receive M/D/E stream, reconstruct file
+;; Args: rdi=server_fd, rsi=local_read_fd, rdx=output_fd
+;; local_read_fd = original file open for reading (for M blocks)
+;; output_fd = new file open for writing
+;; Receives CMD_SYNC_RESP messages until E marker.
+;; Returns: rax = 0 success, -1 error
+;; =============================================================================
+global sync_apply_delta
+sync_apply_delta:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    mov     r12d, edi              ; server_fd
+    mov     r13d, esi              ; local_read_fd
+    mov     r14d, edx              ; output_fd
+
+.apply_loop:
+    ;; Receive next CMD_SYNC_RESP
+    mov     edi, r12d
+    call    proto_recv_msg
+    test    eax, eax
+    jle     .apply_err
+
+    ;; Check cmdId
+    cmp     byte [_proto_buf], CMD_SYNC_RESP
+    jne     .apply_err
+
+    ;; Parse marker (first byte after cmdId)
+    movzx   eax, byte [_proto_buf+1]
+
+    cmp     al, DELTA_END
+    je      .apply_done
+
+    cmp     al, DELTA_MATCH
+    je      .apply_match
+
+    cmp     al, DELTA_DATA
+    je      .apply_data
+
+    ;; Unknown marker — skip
+    jmp     .apply_loop
+
+.apply_match:
+    ;; M + u32be(block_index)
+    ;; Seek to block_index * SYNC_BLOCK_SIZE in local file, read block, write to output
+    mov     eax, [_proto_buf+2]
+    bswap   eax                    ; block index
+    imul    eax, SYNC_BLOCK_SIZE   ; byte offset
+    ;; Seek local file
+    mov     edi, r13d
+    mov     esi, eax               ; offset
+    xor     edx, edx               ; SEEK_SET = 0
+    call    [os_vtable.seek]
+    ;; Read block from local file
+    mov     edi, r13d
+    lea     rsi, [_sync_blockbuf]
+    mov     edx, SYNC_BLOCK_SIZE
+    call    [os_vtable.read]
+    test    eax, eax
+    jle     .apply_err
+    ;; Write block to output
+    mov     edi, r14d
+    lea     rsi, [_sync_blockbuf]
+    mov     edx, eax
+    call    [os_vtable.write]
+    jmp     .apply_loop
+
+.apply_data:
+    ;; D + u32be(data_len) + raw data
+    mov     eax, [_proto_buf+2]
+    bswap   eax                    ; data length
+    test    eax, eax
+    jle     .apply_loop
+    ;; Write raw data to output (data starts at _proto_buf+6)
+    mov     edi, r14d
+    lea     rsi, [_proto_buf+6]
+    mov     edx, eax
+    call    [os_vtable.write]
+    jmp     .apply_loop
+
+.apply_done:
+    xor     eax, eax
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+.apply_err:
+    mov     eax, -1
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+;; =============================================================================
+;; sync_handle_push — Server-side: receive client's delta M/D/E, reconstruct
+;; Args: rdi=client_fd, rsi=local_read_fd, rdx=output_fd
+;; Mirror of sync_apply_delta but on server side for sync-push
+;; =============================================================================
+global sync_handle_push
+sync_handle_push:
+    ;; Same logic as sync_apply_delta — reuse
+    jmp     sync_apply_delta

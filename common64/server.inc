@@ -16,6 +16,16 @@ section .data
     _srv_killfail db "kill failed", 0
     _srv_file_err db "file error", 0
     _srv_ps_cmd db "ps -eo pid,comm --no-headers 2>/dev/null || tasklist /FO CSV /NH 2>nul", 0
+    _srv_sync_tmp db "/tmp/.pmash_sync_srv.tmp", 0
+    ;; Safety guard patterns (commands that could kill pmash itself)
+    _guard_1 db "kill", 0          ; "kill ... pmash" / "killall pmash"
+    _guard_2 db "pkill", 0
+    _guard_3 db "killall", 0
+    _guard_4 db "systemctl stop pmash", 0
+    _guard_5 db "service pmash stop", 0
+    _guard_6 db "rm /usr/local/bin/pmash", 0
+    _guard_7 db "rm -f /usr/local/bin/pmash", 0
+    _guard_blocked db "BLOCKED: command would terminate pmash agent", 0
 
 section .bss
     _srv_hostbuf resb 256
@@ -91,6 +101,8 @@ server_run:
     je      .do_native
     cmp     al, CMD_SYNC_REQ
     je      .do_sync
+    cmp     al, CMD_SYNC_PUSH_REQ
+    je      .do_sync_push
     cmp     al, CMD_SHELL_REQ
     je      .do_shell
     cmp     al, CMD_SELF_UPDATE
@@ -115,6 +127,15 @@ server_run:
     or      eax, ecx
     lea     rsi, [_proto_buf+3]
     mov     byte [rsi+rax], 0      ; null-terminate
+
+    ;; Safety guard: check for self-destructive commands
+    push    rsi
+    mov     rdi, rsi
+    call    .safety_check
+    pop     rsi
+    test    eax, eax
+    jnz     .exec_blocked
+
     ;; Execute
     mov     rdi, rsi
     lea     rsi, [_srv_execbuf]
@@ -132,6 +153,28 @@ server_run:
     push    rcx
     lea     rdi, [_srv_infobuf+8]
     lea     rsi, [_srv_execbuf]
+    rep movsb
+    pop     rcx
+    add     ecx, 8
+    mov     edi, [_srv_client]
+    mov     sil, CMD_EXEC_RESULT
+    lea     rdx, [_srv_infobuf]
+    call    proto_send_msg
+    jmp     .cmd_loop
+
+.exec_blocked:
+    ;; Send blocked message as EXEC_RESULT with error
+    lea     rdi, [_guard_blocked]
+    call    pm_strlen
+    mov     ecx, eax
+    lea     rdi, [_srv_infobuf]
+    mov     dword [rdi], 1         ; exit_code = 1 (error)
+    mov     eax, ecx
+    bswap   eax
+    mov     [rdi+4], eax
+    push    rcx
+    lea     rdi, [_srv_infobuf+8]
+    lea     rsi, [_guard_blocked]
     rep movsb
     pop     rcx
     add     ecx, 8
@@ -427,6 +470,115 @@ server_run:
     call    .send_error
     jmp     .cmd_loop
 
+;; ==== SYNC-PUSH: client sends delta to update server's file ====
+.do_sync_push:
+    ;; Payload: encode_str(path)
+    lea     rsi, [_proto_buf+1]
+    movzx   eax, byte [rsi]
+    shl     eax, 8
+    movzx   ecx, byte [rsi+1]
+    or      eax, ecx
+    add     rsi, 2
+    mov     byte [rsi+rax], 0      ; null-terminate path
+    push    rsi                    ; save path ptr
+
+    ;; Open server's file for reading (to compute sigs)
+    mov     rdi, rsi
+    xor     esi, esi               ; read
+    call    [os_vtable.open]
+    test    eax, eax
+    js      .sp_no_local           ; file doesn't exist — sig_count=0
+    mov     r13d, eax              ; local_read_fd
+
+    ;; Compute sigs
+    mov     edi, r13d
+    call    sync_compute_sigs
+    mov     ebx, eax               ; sig_count
+    ;; Seek back to start
+    mov     edi, r13d
+    xor     esi, esi
+    xor     edx, edx
+    call    [os_vtable.seek]
+    jmp     .sp_send_sigs
+
+.sp_no_local:
+    xor     ebx, ebx              ; 0 sigs
+    mov     r13d, -1               ; no local file
+
+.sp_send_sigs:
+    ;; Send CMD_SYNC_PUSH_SIGS: u32be(sig_count) + sigs
+    lea     rdi, [_srv_infobuf]
+    mov     eax, ebx
+    bswap   eax
+    mov     [rdi], eax
+    add     rdi, 4
+    ;; Copy sigs
+    mov     ecx, ebx
+    shl     ecx, 3                 ; * 8
+    push    rcx
+    lea     rsi, [_sync_sigbuf]
+    rep movsb
+    pop     rcx
+    add     ecx, 4                 ; total = 4 + sigs_bytes
+    mov     edi, [_srv_client]
+    mov     sil, CMD_SYNC_PUSH_SIGS
+    lea     rdx, [_srv_infobuf]
+    call    proto_send_msg
+
+    ;; Open temp output for reconstruction
+    pop     rsi                    ; path ptr
+    push    rsi                    ; keep for rename
+    lea     rdi, [_srv_sync_tmp]
+    mov     esi, 1                 ; write
+    call    [os_vtable.open]
+    test    eax, eax
+    js      .sp_err
+    push    rax                    ; output_fd
+
+    ;; Receive M/D/E from client via sync_apply_delta
+    pop     rdx                    ; output_fd
+    push    rdx
+    mov     edi, [_srv_client]     ; server reads from client
+    mov     esi, r13d              ; local_read_fd (-1 if no file)
+    call    sync_apply_delta
+
+    ;; Close files
+    pop     r8                     ; output_fd
+    push    rax                    ; save result
+    cmp     r13d, -1
+    je      .sp_no_close_local
+    mov     edi, r13d
+    call    [os_vtable.close]
+.sp_no_close_local:
+    mov     edi, r8d
+    call    [os_vtable.close]
+
+    pop     rax
+    test    eax, eax
+    jnz     .sp_err2
+
+    ;; Rename temp → original
+    pop     rsi                    ; original path
+    lea     rdi, [_srv_sync_tmp]
+    call    [os_vtable.rename]
+
+    ;; Send SYNC_PUSH_OK
+    mov     edi, [_srv_client]
+    mov     sil, CMD_SYNC_PUSH_OK
+    xor     edx, edx
+    xor     ecx, ecx
+    call    proto_send_msg
+    jmp     .cmd_loop
+
+.sp_err2:
+    pop     rax                    ; discard path
+.sp_err:
+    ;; Clean up temp
+    lea     rdi, [_srv_sync_tmp]
+    call    [os_vtable.unlink]
+    call    .send_error
+    jmp     .cmd_loop
+
 .do_selfupdate:
     lea     rsi, [_proto_buf+1]
     mov     edi, [_srv_client]
@@ -477,6 +629,135 @@ server_run:
     lea     rdx, [_srv_infobuf]
     mov     ecx, 17
     call    proto_send_msg
+    pop     rbx
+    ret
+
+;; --- Helper: safety check for self-destructive commands ---
+;; rdi = command string → rax = 0 (safe) or 1 (blocked)
+.safety_check:
+    push    rbx
+    push    r12
+    mov     r12, rdi               ; save command ptr
+
+    ;; Check if command contains "pmash" — if not, it's safe
+    mov     rdi, r12
+    lea     rsi, [_srv_version + 0] ; "pmash" — first 5 chars
+    call    .strstr_pmash
+    test    eax, eax
+    jz      .sc_safe               ; "pmash" not in command → safe
+
+    ;; Command mentions "pmash" — check if it's a kill/stop/rm pattern
+    ;; Check "systemctl stop pmash"
+    mov     rdi, r12
+    lea     rsi, [_guard_4]
+    call    .strstr
+    test    eax, eax
+    jnz     .sc_blocked
+
+    ;; Check "service pmash stop"
+    mov     rdi, r12
+    lea     rsi, [_guard_5]
+    call    .strstr
+    test    eax, eax
+    jnz     .sc_blocked
+
+    ;; Check "rm /usr/local/bin/pmash"
+    mov     rdi, r12
+    lea     rsi, [_guard_6]
+    call    .strstr
+    test    eax, eax
+    jnz     .sc_blocked
+
+    mov     rdi, r12
+    lea     rsi, [_guard_7]
+    call    .strstr
+    test    eax, eax
+    jnz     .sc_blocked
+
+    ;; Check "killall pmash" or "pkill pmash"
+    mov     rdi, r12
+    lea     rsi, [_guard_3]        ; "killall"
+    call    .strstr
+    test    eax, eax
+    jnz     .sc_blocked
+
+    mov     rdi, r12
+    lea     rsi, [_guard_2]        ; "pkill"
+    call    .strstr
+    test    eax, eax
+    jnz     .sc_blocked
+
+.sc_safe:
+    xor     eax, eax
+    pop     r12
+    pop     rbx
+    ret
+.sc_blocked:
+    mov     eax, 1
+    pop     r12
+    pop     rbx
+    ret
+
+;; strstr_pmash: check if rdi contains "pmash"
+.strstr_pmash:
+    push    rbx
+    xor     ebx, ebx
+.sp_loop:
+    cmp     byte [rdi+rbx], 0
+    je      .sp_no
+    cmp     byte [rdi+rbx], 'p'
+    jne     .sp_next
+    cmp     byte [rdi+rbx+1], 'm'
+    jne     .sp_next
+    cmp     byte [rdi+rbx+2], 'a'
+    jne     .sp_next
+    cmp     byte [rdi+rbx+3], 's'
+    jne     .sp_next
+    cmp     byte [rdi+rbx+4], 'h'
+    jne     .sp_next
+    mov     eax, 1
+    pop     rbx
+    ret
+.sp_next:
+    inc     ebx
+    jmp     .sp_loop
+.sp_no:
+    xor     eax, eax
+    pop     rbx
+    ret
+
+;; strstr: check if rdi contains rsi substring → eax=1 found, 0 not
+.strstr:
+    push    rbx
+    push    r12
+    mov     r12, rsi               ; needle
+    xor     ebx, ebx               ; haystack offset
+.ss_outer:
+    cmp     byte [rdi+rbx], 0
+    je      .ss_no
+    xor     ecx, ecx               ; needle offset
+.ss_inner:
+    cmp     byte [r12+rcx], 0
+    je      .ss_yes                ; end of needle = full match
+    lea     rax, [rdi+rbx]
+    mov     al, [rax+rcx]
+    cmp     al, 0
+    je      .ss_no
+    cmp     al, [r12+rcx]
+    jne     .ss_next
+    inc     ecx
+    jmp     .ss_inner
+.ss_next:
+    inc     ebx
+    jmp     .ss_outer
+.ss_yes:
+    mov     eax, 1
+    pop     r12
+    pop     rbx
+    ret
+.ss_no:
+    xor     eax, eax
+    pop     r12
     pop     rbx
     ret
 
