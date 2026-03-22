@@ -95,7 +95,12 @@ _linux_open:    ; (path, flags) → fd
     push    ebx
     mov     eax, SYS32_OPEN
     mov     ebx, [esp+8]           ; path
-    mov     ecx, [esp+12]          ; flags
+    mov     ecx, [esp+12]          ; flags (0=read, 1=write)
+    ;; Map our flags: 0 → O_RDONLY, 1 → O_WRONLY|O_CREAT|O_TRUNC
+    cmp     ecx, 1
+    jne     .open_do
+    mov     ecx, L_O_WRONLY | L_O_CREAT | L_O_TRUNC
+.open_do:
     mov     edx, 0644o             ; mode (octal)
     int     0x80
     pop     ebx

@@ -3,6 +3,8 @@
 ;; Part of pmash — lightweight remote agent
 ;; =============================================================================
 
+PUSH_CHUNK equ 32768
+
 section .data
     _srv_version db "pmash 0.1.0", 0
     _srv_err     db "unknown command", 0
@@ -10,11 +12,18 @@ section .data
     _srv_info_p2 db '","version":"pmash 0.1.0","os":"', 0
     _srv_info_p3_w db 'Windows"}', 0
     _srv_info_p3_l db 'Linux"}', 0
+    _srv_killed  db "killed", 0
+    _srv_killfail db "kill failed", 0
+    _srv_psfmt   db '{"pid":%d,"name":"%s"}', 0
+    _srv_file_err db "file error", 0
+
+_srv_ps_cmd db "ps -eo pid,comm --no-headers 2>/dev/null || tasklist /FO CSV /NH 2>nul", 0
 
 section .bss
     _srv_hostbuf resb 256
     _srv_infobuf resb 512
     _srv_execbuf resb 65536
+    _srv_filebuf resb 32768
     _srv_client  resd 1             ; current client fd
 
 section .text
@@ -80,6 +89,14 @@ server_run:
     je      .do_exec
     cmp     al, CMD_INFO_REQ
     je      .do_info
+    cmp     al, CMD_PUSH_START
+    je      .do_push
+    cmp     al, CMD_PULL_REQ
+    je      .do_pull
+    cmp     al, CMD_WRITE
+    je      .do_write
+    cmp     al, CMD_NATIVE
+    je      .do_native
     ;; Unknown
     jmp     .do_unknown
 
@@ -172,6 +189,271 @@ server_run:
     push    edi                 ; len
     push    _srv_infobuf
     push    byte CMD_INFO_RESP
+    push    dword [_srv_client]
+    call    proto_send_msg
+    add     esp, 16
+    jmp     .cmd_loop
+
+;; ==== PUSH: receive file from client ====
+.do_push:
+    ;; PUSH_START payload: file_size(8LE) + encode_str(path)
+    lea     esi, [_proto_buf+1]     ; skip cmdId
+    add     esi, 8                  ; skip file_size (8 bytes LE)
+    ;; Decode path: 2-byte BE len + string
+    movzx   eax, byte [esi]
+    shl     eax, 8
+    movzx   ecx, byte [esi+1]
+    or      eax, ecx
+    add     esi, 2
+    mov     byte [esi+eax], 0       ; null-terminate path
+    ;; Open file for writing (flags=1 = WRONLY|CREAT|TRUNC)
+    push    1
+    push    esi
+    call    [os_vtable.open]
+    add     esp, 8
+    test    eax, eax
+    js      .push_err
+    mov     edi, eax                ; edi = file fd
+    ;; Receive data chunks until PUSH_END
+.push_recv:
+    push    dword [_srv_client]
+    call    proto_recv_msg
+    add     esp, 4
+    test    eax, eax
+    jle     .push_close
+    movzx   ecx, byte [_proto_buf]
+    cmp     cl, CMD_PUSH_DATA
+    jne     .push_chk_end
+    ;; Write chunk: proto_buf+1, length = msg_len - 1
+    dec     eax                     ; payload len = msg_len - 1
+    push    eax
+    lea     esi, [_proto_buf+1]
+    push    esi
+    push    edi
+    call    [os_vtable.write]
+    add     esp, 12
+    jmp     .push_recv
+.push_chk_end:
+    cmp     cl, CMD_PUSH_END
+    je      .push_close
+    jmp     .push_recv
+.push_close:
+    push    edi
+    call    [os_vtable.close]
+    add     esp, 4
+    ;; Send PUSH_OK
+    push    0
+    push    0
+    push    byte CMD_PUSH_OK
+    push    dword [_srv_client]
+    call    proto_send_msg
+    add     esp, 16
+    jmp     .cmd_loop
+.push_err:
+    call    .send_error
+    jmp     .cmd_loop
+
+;; ==== PULL: send file to client ====
+.do_pull:
+    ;; Payload: encode_str(path)
+    lea     esi, [_proto_buf+1]
+    movzx   eax, byte [esi]
+    shl     eax, 8
+    movzx   ecx, byte [esi+1]
+    or      eax, ecx
+    add     esi, 2
+    mov     byte [esi+eax], 0
+    ;; Open file for reading (flags=0 = RDONLY)
+    push    0
+    push    esi
+    call    [os_vtable.open]
+    add     esp, 8
+    test    eax, eax
+    js      .pull_err
+    mov     edi, eax                ; edi = file fd
+.pull_loop:
+    ;; Read chunk
+    push    PUSH_CHUNK
+    push    _srv_filebuf
+    push    edi
+    call    [os_vtable.read]
+    add     esp, 12
+    test    eax, eax
+    jle     .pull_end
+    ;; Send PULL_DATA
+    push    eax
+    push    _srv_filebuf
+    push    byte CMD_PULL_DATA
+    push    dword [_srv_client]
+    call    proto_send_msg
+    add     esp, 16
+    jmp     .pull_loop
+.pull_end:
+    push    edi
+    call    [os_vtable.close]
+    add     esp, 4
+    ;; Send PULL_END
+    push    0
+    push    0
+    push    byte CMD_PULL_END
+    push    dword [_srv_client]
+    call    proto_send_msg
+    add     esp, 16
+    jmp     .cmd_loop
+.pull_err:
+    ;; Send error
+    lea     edi, [_srv_infobuf]
+    mov     byte [edi], 0
+    mov     byte [edi+1], 10
+    mov     esi, _srv_file_err
+    lea     edi, [_srv_infobuf+2]
+    mov     ecx, 10
+    rep movsb
+    push    12
+    push    _srv_infobuf
+    push    byte CMD_ERROR
+    push    dword [_srv_client]
+    call    proto_send_msg
+    add     esp, 16
+    jmp     .cmd_loop
+
+;; ==== WRITE: create/overwrite file ====
+.do_write:
+    ;; Payload: encode_str(path) + encode_blob(content)
+    lea     esi, [_proto_buf+1]
+    ;; Decode path
+    movzx   eax, byte [esi]
+    shl     eax, 8
+    movzx   ecx, byte [esi+1]
+    or      eax, ecx
+    add     esi, 2
+    mov     byte [esi+eax], 0       ; null-terminate
+    push    esi                     ; save path ptr
+    add     esi, eax
+    ;; Decode blob: 4-byte BE len + data
+    mov     eax, [esi]
+    bswap   eax
+    mov     ecx, eax                ; content length
+    add     esi, 4                  ; esi = content data
+    push    ecx                     ; save content length
+    push    esi                     ; save content ptr
+    ;; Open for writing
+    push    1                       ; flags = write
+    push    dword [esp+16]          ; path (3 pushes ago + current push)
+    call    [os_vtable.open]
+    add     esp, 8
+    test    eax, eax
+    js      .write_err
+    mov     edi, eax                ; file fd
+    ;; Write content
+    pop     esi                     ; content ptr
+    pop     ecx                     ; content length
+    pop     eax                     ; discard path
+    push    ecx
+    push    esi
+    push    edi
+    call    [os_vtable.write]
+    add     esp, 12
+    ;; Close
+    push    edi
+    call    [os_vtable.close]
+    add     esp, 4
+    ;; Send WRITE_OK
+    push    0
+    push    0
+    push    byte CMD_WRITE_OK
+    push    dword [_srv_client]
+    call    proto_send_msg
+    add     esp, 16
+    jmp     .cmd_loop
+.write_err:
+    pop     esi
+    pop     ecx
+    pop     eax
+    call    .send_error
+    jmp     .cmd_loop
+
+;; ==== NATIVE: ps/kill ====
+.do_native:
+    movzx   eax, byte [_proto_buf+1]   ; sub-command
+    cmp     al, 0x01                    ; ps
+    je      .do_ps
+    cmp     al, 0x02                    ; kill
+    je      .do_kill
+    call    .send_error
+    jmp     .cmd_loop
+
+.do_ps:
+    ;; Execute "ps -eo pid,comm --no-headers" and return output
+    push    65536
+    push    _srv_execbuf
+    push    _srv_ps_cmd
+    call    [os_vtable.exec]
+    add     esp, 12
+    test    eax, eax
+    js      .ps_err
+    ;; Send as NATIVE_RESP
+    push    eax
+    push    _srv_execbuf
+    push    byte CMD_NATIVE_RESP
+    push    dword [_srv_client]
+    call    proto_send_msg
+    add     esp, 16
+    jmp     .cmd_loop
+.ps_err:
+    call    .send_error
+    jmp     .cmd_loop
+
+.do_kill:
+    ;; Payload: sub_cmd(1) + u32be(pid)
+    mov     eax, [_proto_buf+2]
+    bswap   eax                     ; pid
+
+    ;; Build kill command: "kill -9 <pid>"
+    ;; Simple approach: format and exec
+    push    eax                     ; save pid
+    lea     edi, [_srv_infobuf]
+    mov     dword [edi], 'kill'
+    mov     dword [edi+4], ' -9 '
+    add     edi, 8
+    pop     eax
+    ;; itoa into edi
+    push    eax
+    push    ebx
+    mov     ebx, 10
+    xor     ecx, ecx
+.kill_itoa:
+    xor     edx, edx
+    div     ebx
+    add     dl, '0'
+    push    edx
+    inc     ecx
+    test    eax, eax
+    jnz     .kill_itoa
+.kill_pop:
+    pop     edx
+    mov     [edi], dl
+    inc     edi
+    dec     ecx
+    jnz     .kill_pop
+    mov     byte [edi], 0
+    pop     ebx
+    ;; Execute
+    push    512
+    push    _srv_execbuf
+    push    _srv_infobuf
+    call    [os_vtable.exec]
+    add     esp, 12
+    ;; Send response
+    mov     esi, _srv_killed
+    cmp     eax, 0
+    jge     .kill_ok
+    mov     esi, _srv_killfail
+.kill_ok:
+    call    pm_strlen
+    push    eax
+    push    esi
+    push    byte CMD_NATIVE_RESP
     push    dword [_srv_client]
     call    proto_send_msg
     add     esp, 16
