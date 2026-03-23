@@ -74,11 +74,16 @@ def main():
     FILE_ALIGN = 512
     SECT_ALIGN = 4096
 
-    # PE header size: DOS(64) + pad + PE(24) + OptionalPE32+(112) + sections(40*N)
+    # Add .idata section for imports (forces kernel32.dll loading)
+    # We need 1 extra section for the import directory
+    num_pe_sections = len(segments) + 1  # +1 for .idata
+
+    # PE header size: DOS(64) + pad + PE(24) + OptionalPE32+(112+16*2) + sections(40*N)
     pe_offset = 0x80
-    opt_size = 112  # no data directories
+    num_data_dirs = 2  # [0]=export(unused), [1]=import
+    opt_size = 112 + num_data_dirs * 8
     sect_table_offset = pe_offset + 4 + 20 + opt_size
-    headers_end = sect_table_offset + 40 * len(segments)
+    headers_end = sect_table_offset + 40 * num_pe_sections
     headers_size = align(headers_end, FILE_ALIGN)
 
     # Calculate total image size
@@ -150,7 +155,12 @@ def main():
     struct.pack_into('<Q', out, p, 0x100000); p += 8      # heap reserve
     struct.pack_into('<Q', out, p, 0x1000); p += 8        # heap commit
     p += 4  # loader flags
-    struct.pack_into('<I', out, p, 0); p += 4             # num data dirs (0)
+    struct.pack_into('<I', out, p, num_data_dirs); p += 4  # num data dirs
+    # Data directory [0]: export (unused)
+    p += 8
+    # Data directory [1]: import — will be filled after we know idata RVA
+    import_dd_offset = p
+    p += 8  # placeholder, filled later
 
     # === Section table ===
     names_used = {}
@@ -177,6 +187,80 @@ def main():
         struct.pack_into('<I', out, p, seg['chars']); p += 4
 
         print(f"  PE section '{name}': RVA=0x{rva:x} raw=0x{raw_ptr:x} size=0x{seg['filesz']:x} mem=0x{seg['memsz']:x}")
+
+    # === .idata section (import directory) ===
+    # Place after last data segment
+    last_seg = segments[-1]
+    idata_rva = align(last_seg['vaddr'] - image_base + last_seg['memsz'], SECT_ALIGN)
+    idata_file = elf_file_offset + len(elf)
+    idata_file = align(idata_file, FILE_ALIGN)
+
+    # Build import directory for kernel32.dll
+    # Structure: IMAGE_IMPORT_DESCRIPTOR (20 bytes) + null terminator (20 bytes)
+    # + ILT (8 bytes per entry + 8 null) + hint/name + DLL name
+    idata = bytearray(256)
+    id_off = 0
+
+    # Hint/Name for "ExitProcess" at offset 128
+    hint_off = 128
+    struct.pack_into('<H', idata, hint_off, 0)  # hint
+    idata[hint_off+2:hint_off+2+11] = b'ExitProcess'
+
+    # DLL name "kernel32.dll" at offset 160
+    dll_name_off = 160
+    idata[dll_name_off:dll_name_off+12] = b'kernel32.dll'
+
+    # ILT (Import Lookup Table) at offset 64
+    ilt_off = 64
+    struct.pack_into('<Q', idata, ilt_off, idata_rva + hint_off)  # RVA to hint/name
+    struct.pack_into('<Q', idata, ilt_off + 8, 0)  # null terminator
+
+    # IAT (Import Address Table) at offset 96 — same as ILT for simplicity
+    iat_off = 96
+    struct.pack_into('<Q', idata, iat_off, idata_rva + hint_off)
+    struct.pack_into('<Q', idata, iat_off + 8, 0)
+
+    # IMAGE_IMPORT_DESCRIPTOR at offset 0
+    struct.pack_into('<I', idata, 0, idata_rva + ilt_off)       # OriginalFirstThunk (ILT)
+    struct.pack_into('<I', idata, 4, 0)                          # TimeDateStamp
+    struct.pack_into('<I', idata, 8, 0)                          # ForwarderChain
+    struct.pack_into('<I', idata, 12, idata_rva + dll_name_off)  # Name RVA
+    struct.pack_into('<I', idata, 16, idata_rva + iat_off)       # FirstThunk (IAT)
+    # Null terminator descriptor
+    idata[20:40] = b'\0' * 20
+
+    idata_size = 192  # used bytes
+
+    # Fill import data directory in optional header
+    struct.pack_into('<I', out, import_dd_offset, idata_rva)
+    struct.pack_into('<I', out, import_dd_offset + 4, idata_size)
+
+    # Add .idata section entry
+    out[p:p+8] = b'.idata\0\0'
+    p += 8
+    struct.pack_into('<I', out, p, idata_size); p += 4   # virtual size
+    struct.pack_into('<I', out, p, idata_rva); p += 4    # virtual address
+    struct.pack_into('<I', out, p, align(idata_size, FILE_ALIGN)); p += 4  # raw size
+    struct.pack_into('<I', out, p, idata_file); p += 4   # raw pointer
+    p += 4 + 4 + 2 + 2  # relocs, linenums
+    struct.pack_into('<I', out, p, 0xC0000040)  # INITIALIZED_DATA|MEM_READ|MEM_WRITE
+    p += 4
+    print(f"  PE section '.idata': RVA=0x{idata_rva:x} raw=0x{idata_file:x} size=0x{idata_size:x}")
+
+    # Update image size to include .idata
+    new_image_size = align(idata_rva + idata_size, SECT_ALIGN)
+    if new_image_size > image_size:
+        image_size = new_image_size
+        # Re-write image_size in optional header (it's at a known offset)
+        # image_size is at opt header + 56
+        opt_image_size_offset = pe_offset + 4 + 20 + 56
+        struct.pack_into('<I', out, opt_image_size_offset, image_size)
+
+    # Extend output to include .idata
+    total_file_size = idata_file + align(idata_size, FILE_ALIGN)
+    if len(out) < total_file_size:
+        out.extend(b'\0' * (total_file_size - len(out)))
+    out[idata_file:idata_file + len(idata)] = idata
 
     # === Copy ELF data ===
     out[elf_file_offset:elf_file_offset + len(elf)] = elf

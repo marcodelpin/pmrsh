@@ -6,7 +6,14 @@
                 "       pmash --listen <port>\n" \
                 "       pmash --version\n"
 
-/* Entry: polyglot.S _start calls pmash_main(rsp) */
+/* Entry point — when linked standalone, _start is here.
+ * When linked with polyglot.S, polyglot provides _start and calls pmash_main. */
+#ifndef POLYGLOT_HEADER
+__attribute__((naked)) void _start(void) {
+    __asm__("mov %rsp, %rdi\n\tjmp pmash_main");
+}
+#endif
+
 void pmash_main(long *stack) {
     /* Init OS detection + vtable */
     detect_os();

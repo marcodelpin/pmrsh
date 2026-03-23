@@ -463,22 +463,15 @@ static int win_exec(const char *cmd, char *outbuf, int outbufsize) {
  * ======================================================================== */
 
 int detect_os(void) {
-    /* Try Linux getpid syscall (nr=39). If returns > 0 → Linux.
-     * On Windows, `syscall` with Linux ABI either faults or returns nonsense.
-     * Safe: getpid always returns a positive PID on Linux. */
-    long r;
-    __asm__ volatile(
-        "mov $39, %%eax\n\t"  /* SYS_GETPID */
-        "syscall\n\t"
-        : "=a"(r) : : "rcx", "r11", "memory"
-    );
+    /* Linux getpid syscall (nr=39). Returns valid PID (>0) on Linux.
+     * On Windows, syscall instruction with Linux nr returns negative NTSTATUS.
+     * On Windows 10+, syscall doesn't crash — returns error status. */
+    long r = lx_syscall1(39/*SYS_GETPID*/, 0);
     if (r > 0 && r < 0x100000) {
-        /* Looks like a valid PID → Linux */
-        os_type = 1;
+        os_type = 1; /* Linux */
         return 1;
     }
-    /* Not Linux → assume Windows */
-    os_type = 2;
+    os_type = 2; /* Windows */
     return 2;
 }
 
