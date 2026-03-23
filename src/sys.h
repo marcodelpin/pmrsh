@@ -287,6 +287,29 @@ int  relay_register(uint32_t rdv_ip, uint16_t rdv_port, const char *device_id);
 int  relay_resolve(uint32_t rdv_ip, uint16_t rdv_port, const char *device_id,
                    uint32_t *out_ip, uint16_t *out_port);
 
+/* config.c */
+void config_init(const char *home);
+int  config_lookup(const char *name, uint32_t *ip, uint16_t *port, char *mac);
+int  net_connect_auto(int fd, uint32_t ip, uint16_t port);
+
+/* system.c */
+void system_handle(int cfd);
+int  wol_send(const char *mac_str);
+int  wol_by_name(const char *name);
+
+/* session.c */
+void session_handle(int cfd);
+void recording_start(const char *path);
+void recording_write(const void *data, int len);
+void recording_stop(void);
+int  batch_exec(int server_fd, const char *script_path);
+
+/* fleet.c */
+void known_hosts_init(const char *home);
+int  known_hosts_pin(const char *host, uint16_t port, const uint8_t *fp, int fplen);
+int  known_hosts_check(const char *host, uint16_t port, const uint8_t *fp, int fplen);
+void fleet_status(void);
+
 /* IP parser */
 uint32_t parse_ip(const char *s);
 

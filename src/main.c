@@ -8,7 +8,8 @@
                 "       pmash --version\n" \
                 "Commands: ping exec info ps kill push pull write shell\n" \
                 "          sync sync-push mkdir rm cat stat ls\n" \
-                "          forward <lport:host:rport> socks <port>\n"
+                "          forward <lport:host:rport> socks <port>\n" \
+                "          wol <mac|host> reboot shutdown service batch session fleet\n"
 
 __attribute__((used)) void pmash_main(long *stack);
 
@@ -28,6 +29,8 @@ __attribute__((used)) void pmash_main(long *stack) {
     }
     auth_resolve_paths(home);
     tls_init(home);
+    config_init(home);
+    known_hosts_init(home);
 
     if (argc < 2) { io_print(2, USAGE); io_exit(1); }
 

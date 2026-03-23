@@ -13,6 +13,7 @@ STRIP = strip
 
 SRCS = src/main.c src/util.c src/proto.c src/auth.c src/safety.c \
        src/sync.c src/tunnel.c src/compress.c src/relay.c \
+       src/config.c src/system.c src/session.c src/fleet.c \
        src/server.c src/client.c src/tls.c
 OBJS = $(SRCS:.c=.o)
 

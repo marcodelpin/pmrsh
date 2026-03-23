@@ -243,6 +243,8 @@ void server_run(uint16_t port) {
                 goto disconnect;
             }
             case CMD_TUNNEL_OPEN:  tunnel_handle(cfd); goto disconnect;
+            case 0xC0:             system_handle(cfd); break; /* CMD_SYSTEM */
+            case 0x82:             session_handle(cfd); goto disconnect; /* PTY session */
             default:               srv_send_error(cfd); break;
             }
         }

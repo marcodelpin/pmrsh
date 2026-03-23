@@ -286,6 +286,51 @@ void client_run(uint32_t ip, uint16_t port, const char *cmd, const char *arg) {
         }
         io_close(lfd);
 
+    } else if (!pm_strcmp(cmd, "wol")) {
+        /* Wake-on-LAN — local operation, no server needed */
+        if (!arg) { io_print(2, "Error: wol <mac|hostname>\n"); io_exit(1); }
+        /* Try as MAC first (contains ':'), else lookup in config */
+        int has_colon = 0;
+        for (int i = 0; arg[i]; i++) if (arg[i] == ':') has_colon++;
+        int r = (has_colon >= 5) ? wol_send(arg) : wol_by_name(arg);
+        io_print(1, r == 0 ? "wol sent\n" : "wol failed\n");
+
+    } else if (!pm_strcmp(cmd, "reboot")) {
+        char sub = 0x01; /* SYS_CMD_REBOOT */
+        proto_send_msg(fd, 0xC0, &sub, 1);
+        print_response(); io_print(1, "\n");
+
+    } else if (!pm_strcmp(cmd, "shutdown")) {
+        char sub = 0x02;
+        proto_send_msg(fd, 0xC0, &sub, 1);
+        print_response(); io_print(1, "\n");
+
+    } else if (!pm_strcmp(cmd, "service")) {
+        if (!arg) { io_print(2, "Error: service <list|start|stop|status> [name]\n"); io_exit(1); }
+        uint8_t sub;
+        if (!pm_strcmp(arg, "list")) sub = 0x10;
+        else if (!pm_strcmp(arg, "start")) sub = 0x11;
+        else if (!pm_strcmp(arg, "stop")) sub = 0x12;
+        else if (!pm_strcmp(arg, "status")) sub = 0x13;
+        else sub = 0x13; /* default to status, treat arg as service name */
+        /* TODO: handle "service start nginx" → need 3rd arg */
+        proto_send_msg(fd, 0xC0, &sub, 1);
+        print_response();
+
+    } else if (!pm_strcmp(cmd, "batch")) {
+        if (!arg) { io_print(2, "Error: batch <script.pmash>\n"); io_exit(1); }
+        int n = batch_exec(fd, arg);
+        if (n < 0) io_print(2, "Error: batch failed\n");
+
+    } else if (!pm_strcmp(cmd, "session")) {
+        /* PTY session request */
+        proto_send_msg(fd, 0x82, 0, 0); /* CMD_SESSION_OPEN */
+        /* Raw relay: stdin/stdout ↔ server PTY */
+        proxy_forward(0, fd); /* fd 0 = stdin */
+
+    } else if (!pm_strcmp(cmd, "fleet")) {
+        fleet_status();
+
     } else {
         /* Default: exec the command name */
         send_exec(fd, cmd);
