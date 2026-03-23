@@ -6,13 +6,8 @@
                 "       pmash --listen <port>\n" \
                 "       pmash --version\n"
 
-__attribute__((used)) void pmash_main(long *stack);
-
-__attribute__((naked)) void _start(void) {
-    __asm__("mov %rsp, %rdi\n\tjmp pmash_main");
-}
-
-__attribute__((used)) void pmash_main(long *stack) {
+/* Entry: polyglot.S _start calls pmash_main(rsp) */
+void pmash_main(long *stack) {
     /* Init OS detection + vtable */
     detect_os();
     patch_vtable();
