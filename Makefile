@@ -1,8 +1,8 @@
 # pmash — Makefile (multi-file C, no libc, LTO)
 #
-# Build: make          → pmash (stripped)
-# Test:  make test     → run E2E
-# Clean: make clean
+# Build plain:    make              → pmash (~18KB)
+# Build with TLS: make tls          → pmash (~150KB, needs BearSSL)
+# Clean:          make clean
 
 CC = gcc
 CFLAGS = -Os -fno-stack-protector -fno-builtin -nostdlib -static \
@@ -12,10 +12,14 @@ LDFLAGS = -Wl,--gc-sections -flto -nostdlib -static
 STRIP = strip
 
 SRCS = src/main.c src/util.c src/proto.c src/auth.c src/safety.c \
-       src/sync.c src/tunnel.c src/compress.c src/server.c src/client.c
+       src/sync.c src/tunnel.c src/compress.c src/relay.c \
+       src/server.c src/client.c src/tls.c
 OBJS = $(SRCS:.c=.o)
 
-.PHONY: all test clean
+BEARSSL_INC ?= $(HOME)/bearssl/inc
+BEARSSL_LIB ?= $(HOME)/bearssl/build/libbearssl.a
+
+.PHONY: all tls test clean
 
 all: pmash
 
@@ -24,13 +28,17 @@ pmash: $(OBJS)
 	$(STRIP) $@
 	@echo "Built: $@ ($$(wc -c < $@) bytes)"
 
+tls: CFLAGS += -DHAS_TLS -I$(BEARSSL_INC) -D_FORTIFY_SOURCE=0
+tls: clean $(OBJS)
+	$(CC) $(LDFLAGS) -o pmash $(OBJS) $(BEARSSL_LIB)
+	$(STRIP) pmash
+	@echo "Built: pmash ($$(wc -c < pmash) bytes) [TLS]"
+
 src/%.o: src/%.c src/sys.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 test: pmash
-	@echo "Uploading and testing on build-server..."
-	@scp pmash build-server:/tmp/pmash_test 2>/dev/null && \
-	ssh build-server 'chmod +x /tmp/pmash_test && /tmp/pmash_test --version'
+	@./pmash --version
 
 clean:
 	rm -f pmash src/*.o

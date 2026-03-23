@@ -7,7 +7,8 @@
                 "       pmash --daemon <port>\n" \
                 "       pmash --version\n" \
                 "Commands: ping exec info ps kill push pull write shell\n" \
-                "          sync sync-push mkdir rm cat stat ls\n"
+                "          sync sync-push mkdir rm cat stat ls\n" \
+                "          forward <lport:host:rport> socks <port>\n"
 
 __attribute__((used)) void pmash_main(long *stack);
 
@@ -26,6 +27,7 @@ __attribute__((used)) void pmash_main(long *stack) {
         if (pm_memcmp(*e, "HOME=", 5) == 0) { home = *e + 5; break; }
     }
     auth_resolve_paths(home);
+    tls_init(home);
 
     if (argc < 2) { io_print(2, USAGE); io_exit(1); }
 

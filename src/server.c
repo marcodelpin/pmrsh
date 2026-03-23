@@ -204,7 +204,14 @@ void server_run(uint16_t port) {
         if (cfd < 0) continue;
         srv_client = cfd;
         rl_check();
-        if (auth_server_handshake(cfd) != 0) { rl_fail(); io_close(cfd); continue; }
+
+        /* TLS: peek first byte, if 0x16 and cert exists → TLS handshake */
+        if (tls_server_should_try(cfd)) {
+            tls_server_accept(cfd);
+            /* TLS failure → disconnect (don't fall back, client sent TLS) */
+        }
+
+        if (auth_server_handshake(cfd) != 0) { rl_fail(); tls_close_session(1); io_close(cfd); continue; }
         rl_success();
 
         for (;;) {
@@ -240,6 +247,7 @@ void server_run(uint16_t port) {
             }
         }
     disconnect:
+        tls_close_session(1);
         io_close(cfd);
     }
 }

@@ -274,11 +274,18 @@ void server_run(uint16_t port);
 void client_run(uint32_t ip, uint16_t port, const char *cmd, const char *arg);
 
 /* tls.c */
+void tls_init(const char *home);
+int  tls_server_should_try(int fd);
 int  tls_client_connect(int fd);
 int  tls_server_accept(int fd);
 int  tls_read(int is_server, void *buf, int len);
 int  tls_write(int is_server, const void *buf, int len);
 void tls_close_session(int is_server);
+
+/* relay.c */
+int  relay_register(uint32_t rdv_ip, uint16_t rdv_port, const char *device_id);
+int  relay_resolve(uint32_t rdv_ip, uint16_t rdv_port, const char *device_id,
+                   uint32_t *out_ip, uint16_t *out_port);
 
 /* IP parser */
 uint32_t parse_ip(const char *s);

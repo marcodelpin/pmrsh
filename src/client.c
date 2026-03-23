@@ -188,6 +188,104 @@ void client_run(uint32_t ip, uint16_t port, const char *cmd, const char *arg) {
         send_exec(fd, arg ? lscmd : "ls");
         print_response();
 
+    } else if (!pm_strcmp(cmd, "forward")) {
+        /* Port forward -L: forward <local_port>:<remote_host>:<remote_port> */
+        if (!arg) { io_print(2, "Error: format local_port:host:port\n"); io_exit(1); }
+        /* Parse local_port:remote_ip:remote_port */
+        int lport = pm_atoi(arg);
+        /* Find first ':' */
+        const char *p = arg;
+        while (*p && *p != ':') p++;
+        if (!*p) { io_print(2, "Error: format local_port:host:port\n"); io_exit(1); }
+        p++;
+        /* Parse remote host */
+        char rhost[64]; int ri = 0;
+        while (*p && *p != ':') rhost[ri++] = *p++;
+        rhost[ri] = 0;
+        if (!*p) { io_print(2, "Error: format local_port:host:port\n"); io_exit(1); }
+        p++;
+        int rport = pm_atoi(p);
+        uint32_t rip = parse_ip(rhost);
+
+        /* Listen locally */
+        int lfd = net_socket();
+        if (lfd < 0) { io_print(2, "Error: socket\n"); io_exit(1); }
+        if (net_bind(lfd, lport) != 0) { io_print(2, "Error: bind\n"); io_exit(1); }
+        net_listen(lfd, 5);
+        io_print(1, "Forwarding...\n");
+
+        /* Accept one connection, tunnel through pmash server */
+        int afd = net_accept(lfd);
+        if (afd < 0) { io_print(2, "Error: accept\n"); io_exit(1); }
+
+        /* Send TUNNEL_OPEN to pmash server */
+        char tbuf[6];
+        *(uint32_t*)tbuf = rip;
+        tbuf[4] = rport >> 8; tbuf[5] = rport & 0xFF;
+        proto_send_msg(fd, CMD_TUNNEL_OPEN, tbuf, 6);
+        int ml = proto_recv_msg(fd);
+        if (ml <= 0 || proto_buf[0] != (char)CMD_TUNNEL_OK) {
+            io_print(2, "Error: tunnel failed\n");
+            io_close(afd); io_close(lfd); io_exit(1);
+        }
+        /* Bidirectional: local_client ↔ pmash_server (raw) */
+        proxy_forward(afd, fd);
+        io_close(afd); io_close(lfd);
+
+    } else if (!pm_strcmp(cmd, "socks")) {
+        /* SOCKS5 proxy -D: socks <local_port> */
+        if (!arg) { io_print(2, "Error: socks <port>\n"); io_exit(1); }
+        int lport = pm_atoi(arg);
+        int lfd = net_socket();
+        if (lfd < 0 || net_bind(lfd, lport) != 0 || net_listen(lfd, 5) != 0) {
+            io_print(2, "Error: bind\n"); io_exit(1);
+        }
+        io_print(1, "SOCKS5 listening...\n");
+
+        for (;;) {
+            int afd = net_accept(lfd);
+            if (afd < 0) continue;
+            /* SOCKS5 greeting */
+            char gbuf[512];
+            int gr = io_read(afd, gbuf, 512);
+            if (gr < 2 || gbuf[0] != 0x05) { io_close(afd); continue; }
+            /* Reply: no auth */
+            char rep[2] = { 0x05, 0x00 };
+            io_write(afd, rep, 2);
+            /* SOCKS5 request */
+            gr = io_read(afd, gbuf, 512);
+            if (gr < 4 || gbuf[1] != 0x01) { /* only CONNECT */
+                char fail[10] = { 0x05, 0x07, 0,1, 0,0,0,0, 0,0 };
+                io_write(afd, fail, 10); io_close(afd); continue;
+            }
+            uint32_t dst_ip = 0; uint16_t dst_port = 0;
+            if (gbuf[3] == 0x01) { /* IPv4 */
+                dst_ip = *(uint32_t*)(gbuf + 4);
+                dst_port = (gbuf[8] << 8) | gbuf[9];
+            } else { /* domain/ipv6 not supported */
+                char fail[10] = { 0x05, 0x08, 0,1, 0,0,0,0, 0,0 };
+                io_write(afd, fail, 10); io_close(afd); continue;
+            }
+            /* Tunnel through pmash server */
+            char tbuf[6];
+            *(uint32_t*)tbuf = dst_ip;
+            tbuf[4] = dst_port >> 8; tbuf[5] = dst_port & 0xFF;
+            proto_send_msg(fd, CMD_TUNNEL_OPEN, tbuf, 6);
+            int ml = proto_recv_msg(fd);
+            if (ml <= 0 || proto_buf[0] != (char)CMD_TUNNEL_OK) {
+                char fail[10] = { 0x05, 0x05, 0,1, 0,0,0,0, 0,0 };
+                io_write(afd, fail, 10); io_close(afd); continue;
+            }
+            /* SOCKS5 success */
+            char ok[10] = { 0x05, 0x00, 0x00, 0x01, 0,0,0,0, 0,0 };
+            io_write(afd, ok, 10);
+            /* Forward */
+            proxy_forward(afd, fd);
+            io_close(afd);
+            break; /* one connection per pmash session */
+        }
+        io_close(lfd);
+
     } else {
         /* Default: exec the command name */
         send_exec(fd, cmd);
