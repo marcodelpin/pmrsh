@@ -33,6 +33,11 @@ section .data
     _cmd_version  db "version", 0
     _cmd_selfupd  db "self-update", 0
     _cmd_ls       db "ls", 0
+    _cmd_mkdir    db "mkdir", 0
+    _cmd_rm       db "rm", 0
+    _cmd_cp       db "cp", 0
+    _cmd_cat      db "cat", 0
+    _cmd_stat     db "stat", 0
     _sync_tmp_path db "/tmp/.pmash_sync.tmp", 0
     _cli_syncpush_ok db "sync-push complete", 10, 0
 
@@ -170,12 +175,47 @@ client_run:
     test    eax, eax
     jz      .cmd_ls
 
+    ;; "mkdir"
+    mov     rdi, r14
+    lea     rsi, [_cmd_mkdir]
+    call    .cmdcmp
+    test    eax, eax
+    jz      .cmd_fop_mkdir
+
+    ;; "rm"
+    mov     rdi, r14
+    lea     rsi, [_cmd_rm]
+    call    .cmdcmp
+    test    eax, eax
+    jz      .cmd_fop_rm
+
+    ;; "cp"
+    mov     rdi, r14
+    lea     rsi, [_cmd_cp]
+    call    .cmdcmp
+    test    eax, eax
+    jz      .cmd_fop_cp
+
+    ;; "cat"
+    mov     rdi, r14
+    lea     rsi, [_cmd_cat]
+    call    .cmdcmp
+    test    eax, eax
+    jz      .cmd_fop_cat
+
+    ;; "stat"
+    mov     rdi, r14
+    lea     rsi, [_cmd_stat]
+    call    .cmdcmp
+    test    eax, eax
+    jz      .cmd_fop_stat
+
     ;; "version"
     mov     rdi, r14
     lea     rsi, [_cmd_version]
     call    .cmdcmp
     test    eax, eax
-    jz      .cmd_info              ; version = info request
+    jz      .cmd_info
 
     ;; Default: treat as exec with cmd_name as command
     jmp     .cmd_exec_implicit
@@ -781,6 +821,129 @@ client_run:
     lea     rdi, [_cli_push_fail]
     call    pm_stderr
     jmp     .done
+
+;; ===================== FILEOPS (mkdir/rm/cp/cat/stat) =====================
+.cmd_fop_mkdir:
+    mov     cl, 0x01
+    jmp     .cmd_fop_single
+.cmd_fop_rm:
+    mov     cl, 0x02
+    jmp     .cmd_fop_single
+.cmd_fop_cat:
+    mov     cl, 0x04
+    jmp     .cmd_fop_cat_impl
+.cmd_fop_stat:
+    mov     cl, 0x06
+    jmp     .cmd_fop_single
+
+;; Generic single-path fileop: sub_cmd in cl, path in r15
+.cmd_fop_single:
+    test    r15, r15
+    jz      .noarg_err
+    push    rcx                    ; save sub_cmd
+    push    r15
+    mov     rdi, r15
+    call    pm_strlen
+    pop     r15
+    mov     ecx, eax               ; path length
+    pop     rax                    ; sub_cmd in al
+
+    lea     rdi, [_srv_infobuf]
+    mov     [rdi], al              ; sub_cmd
+    ;; encode_str(path)
+    mov     eax, ecx
+    shr     eax, 8
+    mov     [rdi+1], al
+    mov     [rdi+2], cl
+    add     rdi, 3
+    mov     rsi, r15
+    rep movsb
+    ;; Total = 1 + 2 + pathlen
+    lea     rax, [_srv_infobuf]
+    sub     rdi, rax
+    mov     ecx, edi
+    mov     edi, [_cli_fd]
+    mov     sil, CMD_FILEOPS
+    lea     rdx, [_srv_infobuf]
+    call    proto_send_msg
+    ;; Recv response
+    mov     edi, [_cli_fd]
+    call    proto_recv_msg
+    test    eax, eax
+    jle     .done
+    dec     eax
+    jle     .done
+    mov     edi, 1
+    lea     rsi, [_proto_buf+1]
+    mov     edx, eax
+    call    [os_vtable.write]
+    ;; newline
+    mov     edi, 1
+    lea     rsi, [_cli_newline]
+    mov     edx, 1
+    call    [os_vtable.write]
+    jmp     .done
+
+;; cat: same as single but prints raw output without newline
+.cmd_fop_cat_impl:
+    test    r15, r15
+    jz      .noarg_err
+    push    r15
+    mov     rdi, r15
+    call    pm_strlen
+    pop     r15
+    mov     ecx, eax
+    lea     rdi, [_srv_infobuf]
+    mov     byte [rdi], 0x04       ; cat sub_cmd
+    mov     eax, ecx
+    shr     eax, 8
+    mov     [rdi+1], al
+    mov     [rdi+2], cl
+    add     rdi, 3
+    mov     rsi, r15
+    rep movsb
+    lea     rax, [_srv_infobuf]
+    sub     rdi, rax
+    mov     ecx, edi
+    mov     edi, [_cli_fd]
+    mov     sil, CMD_FILEOPS
+    lea     rdx, [_srv_infobuf]
+    call    proto_send_msg
+    mov     edi, [_cli_fd]
+    call    proto_recv_msg
+    test    eax, eax
+    jle     .done
+    dec     eax
+    jle     .done
+    mov     edi, 1
+    lea     rsi, [_proto_buf+1]
+    mov     edx, eax
+    call    [os_vtable.write]
+    jmp     .done
+
+;; cp: needs 2 args — r15 = "src dst" (space-separated) or src, second arg from argv
+.cmd_fop_cp:
+    ;; For simplicity: use exec "cp <src> <dst>" since cp needs 2 paths
+    ;; and our CLI only has 1 arg slot
+    test    r15, r15
+    jz      .noarg_err
+    ;; Build "cp <arg>" and exec it
+    lea     rdi, [_srv_infobuf]
+    mov     byte [rdi], 'c'
+    mov     byte [rdi+1], 'p'
+    mov     byte [rdi+2], ' '
+    add     rdi, 3
+    mov     rsi, r15
+    push    rdi
+    mov     rdi, r15
+    call    pm_strlen
+    pop     rdi
+    mov     ecx, eax
+    mov     rsi, r15
+    rep movsb
+    mov     byte [rdi], 0
+    lea     rsi, [_srv_infobuf]
+    jmp     .cmd_exec_send
 
 ;; ===================== LS =====================
 .cmd_ls:

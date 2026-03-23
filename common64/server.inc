@@ -128,11 +128,16 @@ server_run:
 .skip_tls:
     pop     rax                    ; discard saved fd
 
+    ;; Rate limit check
+    call    rl_check_banned
+
     ;; Auth
     mov     edi, [_srv_client]
     call    auth_server_handshake
     test    eax, eax
-    jnz     .disconnect
+    jnz     .auth_failed
+
+    call    rl_auth_succeeded
 
     ;; Command dispatch loop
 .cmd_loop:
@@ -167,6 +172,10 @@ server_run:
     je      .do_selfupdate
     cmp     al, CMD_PROXY_CONNECT
     je      .do_proxy
+    cmp     al, CMD_FILEOPS
+    je      .do_fileops
+    cmp     al, CMD_TUNNEL_OPEN
+    je      .do_tunnel
     jmp     .do_unknown
 
 .do_ping:
@@ -636,6 +645,20 @@ server_run:
     call    [os_vtable.unlink]
     call    .send_error
     jmp     .cmd_loop
+
+.do_fileops:
+    mov     edi, [_srv_client]
+    call    fileops_handle
+    jmp     .cmd_loop
+
+.do_tunnel:
+    mov     edi, [_srv_client]
+    call    tunnel_server_handle
+    jmp     .disconnect            ; tunnel done, close connection
+
+.auth_failed:
+    call    rl_auth_failed
+    jmp     .disconnect
 
 .do_selfupdate:
     lea     rsi, [_proto_buf+1]
