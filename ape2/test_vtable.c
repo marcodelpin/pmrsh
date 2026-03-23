@@ -9,7 +9,7 @@ extern void io_exit(int code);
 void _start(void) {
     detect_os();
     patch_vtable();
-    io_print(1, "pmash vtable test: ");
+    io_print(1, "pmrsh vtable test: ");
     io_print(1, "OS detected, vtable patched\n");
     io_print(1, "ping → pong (vtable I/O works)\n");
     io_exit(0);

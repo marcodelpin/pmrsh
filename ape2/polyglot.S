@@ -24,7 +24,7 @@
  *   dec ebp; pop rdx
  * Then we add a jump to skip the rest of the headers.
  *
- * Assemble: gcc -nostdlib -static -Wl,-T,polyglot.ld -o pmash.com polyglot.S vtable_code.o
+ * Assemble: gcc -nostdlib -static -Wl,-T,polyglot.ld -o pmrsh.com polyglot.S vtable_code.o
  */
 
 .section .head, "ax", @progbits
@@ -105,7 +105,7 @@ opt_end:
 _real_start:
     /* Standard SysV entry: rsp has argc, argv, envp */
     mov %rsp, %rdi
-    call pmash_main
+    call pmrsh_main
 
     /* Unreachable */
     ud2

@@ -1,5 +1,5 @@
 /* sys.h — Types, syscall wrappers, constants (no libc)
- * Part of pmash — lightweight remote agent
+ * Part of pmrsh — lightweight remote agent
  */
 #ifndef PMRSH_SYS_H
 #define PMRSH_SYS_H
