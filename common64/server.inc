@@ -17,6 +17,13 @@ section .data
     _srv_file_err db "file error", 0
     _srv_ps_cmd db "ps -eo pid,comm --no-headers 2>/dev/null || tasklist /FO CSV /NH 2>nul", 0
     _srv_sync_tmp db "/tmp/.pmash_sync_srv.tmp", 0
+    ;; _tls_cert_path resolved at runtime via _auth_keydir_buf + "/tls/cert.der"
+
+section .bss
+    global _tls_cert_path_buf
+    _tls_cert_path_buf resb 200
+
+section .data
     ;; Safety guard patterns (commands that could kill pmash itself)
     _guard_1 db "kill", 0          ; "kill ... pmash" / "killall pmash"
     _guard_2 db "pkill", 0
@@ -70,8 +77,59 @@ server_run:
     js      .accept_loop
     mov     [_srv_client], eax
 
-    ;; Auth
+    ;; Protocol detection: peek first byte to decide TLS vs plain
+    ;; 0x16 = TLS ClientHello → do TLS handshake
+    ;; anything else → plain protocol (auth request)
+    ;; Use MSG_PEEK (flag=2) via recvfrom to peek without consuming
+    push    rax                    ; save client fd
+    sub     rsp, 8                 ; space for peek byte
+    mov     edi, eax               ; client fd
+    lea     rsi, [rsp]             ; buf
+    mov     edx, 1                 ; len = 1
+    mov     r10d, 2                ; flags = MSG_PEEK
+    xor     r8d, r8d               ; addr = NULL
+    xor     r9d, r9d               ; addrlen = NULL
+    mov     eax, SYS64_RECVFROM
+    syscall
+    movzx   eax, byte [rsp]
+    add     rsp, 8
+    cmp     al, 0x16               ; TLS record type?
+    jne     .skip_tls
+
+    ;; Build cert path: _auth_keydir_buf + "/tls/cert.der"
+    lea     rdi, [_tls_cert_path_buf]
+    lea     rsi, [_auth_keydir_buf]
+.tls_cp_dir:
+    lodsb
+    test    al, al
+    jz      .tls_cp_sfx
+    stosb
+    jmp     .tls_cp_dir
+.tls_cp_sfx:
+    mov     dword [rdi], '/tls'
+    add     rdi, 4
+    mov     dword [rdi], '/cer'
+    add     rdi, 4
+    mov     dword [rdi], 't.de'
+    add     rdi, 4
+    mov     byte [rdi], 'r'
+    mov     byte [rdi+1], 0
+    ;; Check if cert exists
+    lea     rdi, [_tls_cert_path_buf]
+    xor     esi, esi
+    call    [os_vtable.open]
+    test    eax, eax
+    js      .skip_tls              ; no cert → skip TLS
     mov     edi, eax
+    call    [os_vtable.close]
+    pop     rdi                    ; restore client fd
+    push    rdi
+    call    tls_wrap_server
+.skip_tls:
+    pop     rax                    ; discard saved fd
+
+    ;; Auth
+    mov     edi, [_srv_client]
     call    auth_server_handshake
     test    eax, eax
     jnz     .disconnect
@@ -600,6 +658,7 @@ server_run:
     jmp     .cmd_loop
 
 .disconnect:
+    call    tls_unwrap             ; restore plain send/recv for next client
     mov     edi, [_srv_client]
     call    [os_vtable.closesock]
     jmp     .accept_loop

@@ -24,6 +24,7 @@ default rel
 %include "../common64/blockcache.inc"
 %include "../common64/daemon.inc"
 %include "../common64/selfupdate.inc"
+%include "../common64/tls.inc"
 %include "../common64/auth.inc"
 %include "../common64/client.inc"
 %include "../common64/server.inc"

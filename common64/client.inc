@@ -73,6 +73,11 @@ client_run:
     test    eax, eax
     jnz     .conn_err
 
+    ;; TLS handshake — skip for now (server must have certs first)
+    ;; TODO: peek first byte from server; if 0x16 → TLS, else plain
+    ;; For now, client only does TLS when --tls flag is set (not implemented)
+    ;; This ensures backwards compat with plain servers
+
     ;; Auth handshake
     mov     edi, [_cli_fd]
     call    auth_client_handshake
