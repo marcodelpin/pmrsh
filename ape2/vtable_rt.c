@@ -271,7 +271,7 @@ static void *hStdout, *hStderr;
 /* --- PEB-based module + export resolution (no LoadLibrary needed) --- */
 
 /* Walk PEB → LDR → InMemoryOrderModuleList to find loaded DLLs */
-static void *find_module(const char *name) {
+void *find_module(const char *name) {
     /* Read PEB from GS:[0x60] on x86_64 Windows */
     void *peb;
     __asm__("mov %%gs:0x60, %0" : "=r"(peb));
@@ -304,7 +304,7 @@ static void *find_module(const char *name) {
 }
 
 /* Resolve export by name from PE module */
-static void *find_export(void *module, const char *name) {
+void *find_export(void *module, const char *name) {
     if (!module) return 0;
     char *base = module;
     /* PE header at offset from DOS header e_lfanew */

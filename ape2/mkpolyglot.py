@@ -182,8 +182,12 @@ def main():
     names_used = {}
     for seg in segments:
         rva = seg['vaddr'] - image_base
+        # Use EXACT ELF vaddr as PE RVA — section alignment set to match
         raw_ptr = elf_file_offset + seg['offset']
-        raw_size = align(seg['filesz'], FILE_ALIGN)
+        raw_ptr_aligned = raw_ptr & ~(FILE_ALIGN - 1)  # PE needs file-aligned raw ptr
+        extra = raw_ptr - raw_ptr_aligned
+        raw_ptr = raw_ptr_aligned
+        raw_size = align(seg['filesz'] + extra, FILE_ALIGN)
 
         # Unique section name
         name = seg['name']
