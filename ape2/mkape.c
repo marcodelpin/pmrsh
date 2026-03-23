@@ -158,14 +158,37 @@ static int build_rsrc(uint8_t *out, uint32_t rva, const uint8_t *ico, long isz) 
     return ALIGN(W, FA);
 }
 
+/* Load pre-linked .rsrc section and rebase RVAs */
+static int load_rsrc_bin(uint8_t *out, uint32_t new_rva, const char *path, uint32_t old_rva) {
+    long sz = 0;
+    uint8_t *data = readf(path, &sz);
+    if (!data || sz < 16) return 0;
+    memcpy(out, data, sz);
+    free(data);
+    /* Rebase: fix DATA_ENTRY RVA fields (values in range [old_rva, old_rva+sz)) */
+    int32_t delta = (int32_t)new_rva - (int32_t)old_rva;
+    if (delta != 0) {
+        for (long i = 0; i + 4 <= sz; i += 4) {
+            uint32_t v = *(uint32_t*)(out + i);
+            if (v >= old_rva && v < old_rva + (uint32_t)sz)
+                *(uint32_t*)(out + i) = v + delta;
+        }
+    }
+    printf("  .rsrc: %ld bytes, rebased 0x%x->0x%x\n", sz, old_rva, new_rva);
+    return ALIGN(sz, FA);
+}
+
 int main(int argc, char **argv) {
-    const char *elf_path=0,*ico_path=0,*out_path=0;
+    const char *elf_path=0,*ico_path=0,*out_path=0,*rsrc_path=0;
+    uint32_t rsrc_old_rva=0;
     for(int i=1;i<argc;i++){
         if(!strcmp(argv[i],"-icon")&&i+1<argc) ico_path=argv[++i];
+        else if(!strcmp(argv[i],"-rsrc")&&i+1<argc) rsrc_path=argv[++i];
+        else if(!strcmp(argv[i],"-rsrc-rva")&&i+1<argc) rsrc_old_rva=strtoul(argv[++i],0,0);
         else if(!strcmp(argv[i],"-o")&&i+1<argc) out_path=argv[++i];
         else if(!elf_path) elf_path=argv[i];
     }
-    if(!elf_path||!out_path){fprintf(stderr,"Usage: mkape <elf> [-icon ico] -o out.com\n");return 1;}
+    if(!elf_path||!out_path){fprintf(stderr,"Usage: mkape <elf> [-icon ico | -rsrc bin -rsrc-rva 0xNNNN] -o out.exe\n");return 1;}
 
     long esz=0,isz=0;
     uint8_t *elf=readf(elf_path,&esz);
@@ -204,7 +227,8 @@ int main(int argc, char **argv) {
     /* .rsrc */
     uint8_t rsrc[65536]; int rsrc_sz=0;
     uint64_t rsrc_rva=ALIGN(max_rva,SA);
-    if(ico) rsrc_sz=build_rsrc(rsrc,(uint32_t)rsrc_rva,ico,isz);
+    if(rsrc_path) rsrc_sz=load_rsrc_bin(rsrc,(uint32_t)rsrc_rva,rsrc_path,rsrc_old_rva);
+    else if(ico) rsrc_sz=build_rsrc(rsrc,(uint32_t)rsrc_rva,ico,isz);
     if(rsrc_sz>0) max_rva=rsrc_rva+ALIGN(rsrc_sz,SA);
 
     int nsect=ns+(rsrc_sz>0?1:0);
