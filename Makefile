@@ -49,10 +49,19 @@ windows:
 		-o pmash.exe $(SRCS) res/pmash.res -lws2_32 -lkernel32
 	@echo "Built: pmash.exe ($$(wc -c < pmash.exe) bytes)"
 
-# APE (Actually Portable Executable) — runs on Linux + Windows + Mac + BSD
-ape: clean
-	$(COSMOCC) -Os -s -Isrc -o pmash.com $(SRCS)
-	@echo "Built: pmash.com ($$(wc -c < pmash.com) bytes) [APE]"
+# APE: vtable polyglot — single binary for Linux + Windows (with TLS + icon)
+ape: ape2/mkape
+	$(CC) -Os -fno-stack-protector -fno-builtin -nostdlib -static \
+		-DHAS_TLS -I$(BEARSSL_INC) -D_FORTIFY_SOURCE=0 \
+		-include ape2/sys_vtable.h -T ape2/ape.ld \
+		-o ape2/pmash.elf ape2/vtable_rt.c ape2/main_ape.c ape2/tls_ape.c \
+		$(filter-out src/main.c src/util.c src/tls.c,$(SRCS)) $(BEARSSL_LIB)
+	./ape2/mkape ape2/pmash.elf -icon res/pmash.ico -o pmash.exe
+	$(STRIP) pmash.exe
+	@echo "Built: pmash.exe ($$(wc -c < pmash.exe) bytes) [APE+TLS+icon]"
+
+ape2/mkape: ape2/mkape.c
+	$(CC) -O2 -o $@ $<
 
 test: pmash
 	@./pmash --version
