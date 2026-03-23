@@ -16,7 +16,7 @@
 
 /* Define the vtable instance (buffers defined by proto.c, server.c, sync.c) */
 os_vtable_t vt;
-int os_type;
+volatile int os_type; /* volatile: prevent compiler from eliminating Windows path */
 
 /* === Pure utilities (no OS calls) === */
 size_t pm_strlen(const char *s) { size_t n=0; if(!s) return 0; while(s[n]) n++; return n; }

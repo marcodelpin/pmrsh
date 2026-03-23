@@ -34,7 +34,7 @@ extern int     net_accept(int fd);
 /* Init — call at startup before anything else */
 extern int  detect_os(void);
 extern void patch_vtable(void);
-extern int  os_type;
+extern volatile int os_type;
 
 /* vtable also exposes send/recv for proto.c */
 typedef struct {
