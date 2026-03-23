@@ -38,6 +38,44 @@ int pm_atoi(const char *s) {
     return neg ? -r : r;
 }
 
+#ifdef _WIN32
+
+int io_hostname(char *buf, int len) {
+    DWORD sz = len;
+    GetComputerNameA(buf, &sz);
+    return sz;
+}
+
+void io_sleep_ms(int ms) { Sleep(ms); }
+
+int io_exec(const char *cmd, char *outbuf, int outbufsize) {
+    HANDLE rd, wr;
+    if (!CreatePipe(&rd, &wr, 0, 0)) return -1;
+    SetHandleInformation(wr, 1, 1); /* HANDLE_FLAG_INHERIT */
+    STARTUPINFOA si;
+    pm_memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = wr; si.hStdError = wr; si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    PROCESS_INFORMATION pi;
+    char cmdline[4096] = "cmd /c ";
+    pm_memcpy(cmdline + 7, cmd, pm_strlen(cmd) + 1);
+    if (!CreateProcessA(0, cmdline, 0, 0, 1/*inherit*/, 0, 0, 0, &si, &pi)) {
+        CloseHandle(rd); CloseHandle(wr); return -1;
+    }
+    CloseHandle(wr);
+    int total = 0;
+    DWORD nread;
+    while (ReadFile(rd, outbuf + total, outbufsize - total, &nread, 0) && nread > 0)
+        total += nread;
+    WaitForSingleObject(pi.hProcess, 30000);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(rd);
+    outbuf[total] = 0;
+    return total;
+}
+
+#else /* Linux */
+
 int io_hostname(char *buf, int len) {
     int fd = io_open("/etc/hostname", 0);
     if (fd < 0) return 0;
@@ -84,6 +122,8 @@ int io_exec(const char *cmd, char *outbuf, int outbufsize) {
     outbuf[total] = 0;
     return total;
 }
+
+#endif /* _WIN32 */
 
 uint32_t parse_ip(const char *s) {
     uint32_t ip = 0; int octet = 0;

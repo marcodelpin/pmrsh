@@ -25,8 +25,13 @@ static int pb_string(uint8_t *buf, int field, const void *data, int len) {
 }
 
 static int udp_sendto(int fd, const void *buf, int len, uint32_t ip, uint16_t port) {
-    struct sockaddr_in sa = { AF_INET, __builtin_bswap16(port), ip, 0 };
-    return (int)sys6(SYS_SENDTO, fd, (long)buf, len, 0, (long)&sa, sizeof(sa));
+    /* Build sockaddr_in manually to avoid platform struct differences */
+    uint8_t sa[16];
+    pm_memset(sa, 0, 16);
+    *(uint16_t*)(sa) = AF_INET;
+    *(uint16_t*)(sa+2) = __builtin_bswap16(port);
+    *(uint32_t*)(sa+4) = ip;
+    return (int)sys6(SYS_SENDTO, fd, (long)buf, len, 0, (long)sa, 16);
 }
 
 int relay_register(uint32_t rdv_ip, uint16_t rdv_port, const char *device_id) {

@@ -4,15 +4,21 @@
 #ifndef PMASH_SYS_H
 #define PMASH_SYS_H
 
+#ifdef _WIN32
+typedef unsigned long long size_t;
+typedef long long          ssize_t;
+#else
 typedef unsigned long  size_t;
 typedef long           ssize_t;
+#endif
 typedef unsigned short uint16_t;
 typedef unsigned int   uint32_t;
 typedef unsigned long  uint64_t;
 typedef int            int32_t;
 typedef unsigned char  uint8_t;
 
-/* === Inline syscall wrappers === */
+#ifndef _WIN32
+/* === Linux: Inline syscall wrappers === */
 
 static __attribute__((always_inline)) long
 sys1(long nr, long a) {
@@ -108,7 +114,9 @@ sys6(long nr, long a, long b, long c, long d, long e, long f) {
 #define SEEK_SET     0
 #define SIGKILL      9
 
-/* === Protocol command IDs === */
+#endif /* _WIN32 — end of Linux-specific constants+syscalls */
+
+/* === Protocol command IDs (platform-independent) === */
 
 #define CMD_AUTH_REQUEST    0x01
 #define CMD_AUTH_CHALLENGE  0x02
@@ -158,6 +166,11 @@ sys6(long nr, long a, long b, long c, long d, long e, long f) {
 #define DELTA_DATA      'D'
 #define DELTA_END       'E'
 
+/* === Network struct === */
+#ifndef _WIN32
+struct sockaddr_in { uint16_t family; uint16_t port; uint32_t addr; uint64_t zero; };
+#endif
+
 /* === Shared buffers (global, no malloc) === */
 
 extern char proto_buf[65536];
@@ -171,6 +184,8 @@ extern uint8_t sync_sigbuf[65536];
 extern int srv_client;
 
 /* === I/O wrappers === */
+
+#ifndef _WIN32
 
 static inline ssize_t io_write(int fd, const void *buf, size_t len) {
     return sys3(SYS_WRITE, fd, (long)buf, len);
@@ -203,8 +218,6 @@ static inline int net_socket(void) {
     return (int)sys3(SYS_SOCKET, AF_INET, SOCK_STREAM, 0);
 }
 
-struct sockaddr_in { uint16_t family; uint16_t port; uint32_t addr; uint64_t zero; };
-
 static inline int net_connect(int fd, uint32_t ip, uint16_t port) {
     struct sockaddr_in sa = { AF_INET, __builtin_bswap16(port), ip, 0 };
     return (int)sys3(SYS_CONNECT, fd, (long)&sa, sizeof(sa));
@@ -221,6 +234,10 @@ static inline int net_listen(int fd, int backlog) {
 static inline int net_accept(int fd) {
     return (int)sys3(SYS_ACCEPT, fd, 0, 0);
 }
+
+#else /* _WIN32 */
+#include "sys_win.h"
+#endif /* _WIN32 */
 
 /* === Function declarations === */
 

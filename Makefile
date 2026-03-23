@@ -20,7 +20,7 @@ OBJS = $(SRCS:.c=.o)
 BEARSSL_INC ?= $(HOME)/bearssl/inc
 BEARSSL_LIB ?= $(HOME)/bearssl/build/libbearssl.a
 
-.PHONY: all tls test clean
+.PHONY: all tls windows test clean
 
 all: pmash
 
@@ -38,8 +38,16 @@ tls: clean $(OBJS)
 src/%.o: src/%.c src/sys.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# Cross-compile for Windows (MinGW)
+windows:
+	x86_64-w64-mingw32-gcc -Os -fno-stack-protector -ffunction-sections -fdata-sections \
+		-fno-unwind-tables -fno-asynchronous-unwind-tables -flto -Isrc -D_WIN32 \
+		-nostartfiles -Wl,--gc-sections -s \
+		-o pmash.exe $(SRCS) -lws2_32 -lkernel32
+	@echo "Built: pmash.exe ($$(wc -c < pmash.exe) bytes)"
+
 test: pmash
 	@./pmash --version
 
 clean:
-	rm -f pmash src/*.o
+	rm -f pmash pmash.exe src/*.o
