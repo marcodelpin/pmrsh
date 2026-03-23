@@ -32,9 +32,9 @@ static void send_fileop(int fd, uint8_t sub, const char *path) {
 void client_run(uint32_t ip, uint16_t port, const char *cmd, const char *arg) {
     auth_load_or_gen();
     int fd = net_socket();
-    if (fd < 0) { io_print(2, "Error: connection failed\n"); io_exit(1); }
+    if (fd < 0) { io_print(2, "Error: socket failed\n"); io_exit(1); }
     cli_fd = fd;
-    if (net_connect(fd, ip, port) != 0) { io_print(2, "Error: connection failed\n"); io_exit(1); }
+    if (net_connect(fd, ip, port) != 0) { io_print(2, "Error: connect failed\n"); io_exit(1); }
     if (auth_client_handshake(fd) != 0) { io_print(2, "Error: auth failed\n"); io_exit(1); }
 
     /* --- Command dispatch --- */

@@ -5,8 +5,8 @@
 #define PMASH_SYS_H
 
 #ifdef _WIN32
-typedef unsigned long long size_t;
-typedef long long          ssize_t;
+#include <stddef.h>  /* size_t from system */
+typedef long long ssize_t;
 #else
 typedef unsigned long  size_t;
 typedef long           ssize_t;

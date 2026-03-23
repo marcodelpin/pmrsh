@@ -64,9 +64,13 @@ static inline long sys6(long n,long a,long b,long c,long d,long e,long f){(void)
 
 /* Win32 API — use MinGW headers */
 #define WIN32_LEAN_AND_MEAN
-#include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
+
+/* Forward declarations for functions used in inline wrappers below */
+void *pm_memset(void *d, int c, size_t n);
+size_t pm_strlen(const char *s);
 
 /* === I/O wrappers (Windows) === */
 
@@ -135,10 +139,12 @@ static inline int net_socket(void) {
 }
 
 static inline int net_connect(int fd, uint32_t ip, uint16_t port) {
-    struct { uint16_t f; uint16_t p; uint32_t a; uint64_t z; } sa = {
-        2, __builtin_bswap16(port), ip, 0
-    };
-    return connect((SOCKET)fd, (const struct sockaddr*)&sa, sizeof(sa));
+    struct sockaddr_in sa;
+    pm_memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(port);
+    sa.sin_addr.s_addr = ip;
+    return connect((SOCKET)(unsigned)fd, (const struct sockaddr*)&sa, sizeof(sa));
 }
 
 static inline int net_bind(int fd, uint16_t port) {
