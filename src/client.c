@@ -139,13 +139,13 @@ void client_run(uint32_t ip, uint16_t port, const char *cmd, const char *arg) {
         *(uint32_t*)(buf + 2 + al) = __builtin_bswap32(sc);
         pm_memcpy(buf + 6 + al, sync_sigbuf, sc * 8);
         proto_send_msg(fd, CMD_SYNC_REQ, buf, 6 + al + sc * 8);
-        int ofd = io_open("/tmp/.pmash_sync.tmp", 1);
+        int ofd = io_open("/tmp/.pmrsh_sync.tmp", 1);
         if (ofd >= 0) {
             int r = sync_apply_delta(fd, lfd >= 0 ? lfd : -1, ofd);
             io_close(ofd);
             if (lfd >= 0) io_close(lfd);
-            if (r == 0) { sys2(SYS_RENAME, (long)"/tmp/.pmash_sync.tmp", (long)arg); io_print(1, "sync complete\n"); }
-            else { sys1(SYS_UNLINK, (long)"/tmp/.pmash_sync.tmp"); io_print(2, "Error: sync failed\n"); }
+            if (r == 0) { sys2(SYS_RENAME, (long)"/tmp/.pmrsh_sync.tmp", (long)arg); io_print(1, "sync complete\n"); }
+            else { sys1(SYS_UNLINK, (long)"/tmp/.pmrsh_sync.tmp"); io_print(2, "Error: sync failed\n"); }
         } else { if (lfd >= 0) io_close(lfd); io_print(2, "Error: temp file\n"); }
 
     } else if (!pm_strcmp(cmd, "sync-push")) {
@@ -214,11 +214,11 @@ void client_run(uint32_t ip, uint16_t port, const char *cmd, const char *arg) {
         net_listen(lfd, 5);
         io_print(1, "Forwarding...\n");
 
-        /* Accept one connection, tunnel through pmash server */
+        /* Accept one connection, tunnel through pmrsh server */
         int afd = net_accept(lfd);
         if (afd < 0) { io_print(2, "Error: accept\n"); io_exit(1); }
 
-        /* Send TUNNEL_OPEN to pmash server */
+        /* Send TUNNEL_OPEN to pmrsh server */
         char tbuf[6];
         *(uint32_t*)tbuf = rip;
         tbuf[4] = rport >> 8; tbuf[5] = rport & 0xFF;
@@ -228,7 +228,7 @@ void client_run(uint32_t ip, uint16_t port, const char *cmd, const char *arg) {
             io_print(2, "Error: tunnel failed\n");
             io_close(afd); io_close(lfd); io_exit(1);
         }
-        /* Bidirectional: local_client ↔ pmash_server (raw) */
+        /* Bidirectional: local_client ↔ pmrsh_server (raw) */
         proxy_forward(afd, fd);
         io_close(afd); io_close(lfd);
 
@@ -266,7 +266,7 @@ void client_run(uint32_t ip, uint16_t port, const char *cmd, const char *arg) {
                 char fail[10] = { 0x05, 0x08, 0,1, 0,0,0,0, 0,0 };
                 io_write(afd, fail, 10); io_close(afd); continue;
             }
-            /* Tunnel through pmash server */
+            /* Tunnel through pmrsh server */
             char tbuf[6];
             *(uint32_t*)tbuf = dst_ip;
             tbuf[4] = dst_port >> 8; tbuf[5] = dst_port & 0xFF;
@@ -282,7 +282,7 @@ void client_run(uint32_t ip, uint16_t port, const char *cmd, const char *arg) {
             /* Forward */
             proxy_forward(afd, fd);
             io_close(afd);
-            break; /* one connection per pmash session */
+            break; /* one connection per pmrsh session */
         }
         io_close(lfd);
 
@@ -318,7 +318,7 @@ void client_run(uint32_t ip, uint16_t port, const char *cmd, const char *arg) {
         print_response();
 
     } else if (!pm_strcmp(cmd, "batch")) {
-        if (!arg) { io_print(2, "Error: batch <script.pmash>\n"); io_exit(1); }
+        if (!arg) { io_print(2, "Error: batch <script.pmrsh>\n"); io_exit(1); }
         int n = batch_exec(fd, arg);
         if (n < 0) io_print(2, "Error: batch failed\n");
 

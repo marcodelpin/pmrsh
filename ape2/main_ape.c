@@ -1,25 +1,25 @@
 /* main_ape.c — Entry point for vtable-based unified binary */
 #include "sys_vtable.h"
 
-#define VERSION "pmash 0.2.0 (ape-vtable)\n"
-#define USAGE   "Usage: pmash -h <host> [-p <port>] <cmd> [arg]\n" \
-                "       pmash --listen <port>\n" \
-                "       pmash --version\n"
+#define VERSION "pmrsh 0.2.0 (ape-vtable)\n"
+#define USAGE   "Usage: pmrsh -h <host> [-p <port>] <cmd> [arg]\n" \
+                "       pmrsh --listen <port>\n" \
+                "       pmrsh --version\n"
 
-/* ELF entry: _start → elf_entry_trampoline → pmash_main
- * PE entry: entry_pe() in vtable_rt.c → pmash_main */
+/* ELF entry: _start → elf_entry_trampoline → pmrsh_main
+ * PE entry: entry_pe() in vtable_rt.c → pmrsh_main */
 #ifndef POLYGLOT_HEADER
 void elf_entry_trampoline(long *stack) {
     os_type = 1; /* Linux */
     patch_vtable();
-    pmash_main(stack);
+    pmrsh_main(stack);
 }
 __attribute__((naked)) void _start(void) {
     __asm__("mov %rsp, %rdi\n\tjmp elf_entry_trampoline");
 }
 #endif
 
-void pmash_main(long *stack) {
+void pmrsh_main(long *stack) {
 
     int argc = (int)stack[0];
     char **argv = (char**)(stack + 1);

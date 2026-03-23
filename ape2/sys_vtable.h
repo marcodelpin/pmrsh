@@ -2,8 +2,8 @@
  * Replaces sys.h when building the single-binary APE.
  * All I/O functions are extern (provided by vtable_rt.c).
  */
-#ifndef PMASH_SYS_VTABLE_H
-#define PMASH_SYS_VTABLE_H
+#ifndef PMRSH_SYS_VTABLE_H
+#define PMRSH_SYS_VTABLE_H
 
 typedef unsigned long  size_t;
 typedef long           ssize_t;
@@ -221,5 +221,5 @@ void   known_hosts_init(const char *home);
 void   fleet_status(void);
 uint32_t parse_ip(const char *s);
 
-#define PMASH_SYS_H /* prevent sys.h from being included */
+#define PMRSH_SYS_H /* prevent sys.h from being included */
 #endif

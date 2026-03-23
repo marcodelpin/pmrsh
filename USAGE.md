@@ -1,4 +1,4 @@
-# pmash — Lightweight Remote Agent
+# pmrsh — Lightweight Remote Agent
 
 **176KB single binary** — runs on Linux and Windows from the same file.
 
@@ -6,49 +6,49 @@
 
 ```bash
 # Server (on target machine)
-chmod +x pmash.exe    # Linux only
-./pmash.exe --listen 8822
+chmod +x pmrsh.exe    # Linux only
+./pmrsh.exe --listen 8822
 
 # Client (from any machine)
-./pmash.exe -h <host> -p 8822 ping
-./pmash.exe -h <host> exec "hostname"
+./pmrsh.exe -h <host> -p 8822 ping
+./pmrsh.exe -h <host> exec "hostname"
 ```
 
 ## Commands
 
 | Command | Example | Description |
 |---|---|---|
-| `ping` | `pmash -h host ping` | Connectivity check |
-| `exec` | `pmash -h host exec "ls -la"` | Run command, get output |
-| `info` | `pmash -h host info` | JSON: hostname, version, OS |
-| `ps` | `pmash -h host ps` | Process list |
-| `kill` | `pmash -h host kill 1234` | Kill process by PID |
-| `push` | `pmash -h host push /path/file` | Upload file to server |
-| `pull` | `pmash -h host pull /path/file` | Download file from server |
-| `write` | `pmash -h host write "path:content"` | Create file with content |
-| `cat` | `pmash -h host cat /path/file` | Read file content |
-| `mkdir` | `pmash -h host mkdir /path/dir` | Create directory |
-| `rm` | `pmash -h host rm /path/file` | Delete file |
-| `stat` | `pmash -h host stat /path/file` | File size (8-byte LE) |
-| `ls` | `pmash -h host ls /path` | List directory |
-| `shell` | `pmash -h host shell "cmd"` | Execute in shell session |
-| `sync` | `pmash -h host sync /path/file` | Delta pull (Adler32 blocks) |
-| `sync-push` | `pmash -h host sync-push /path` | Delta push to server |
-| `forward` | `pmash -h host forward 8080:target:80` | Port forwarding (-L) |
-| `socks` | `pmash -h host socks 1080` | SOCKS5 proxy (-D) |
-| `wol` | `pmash -h host wol aa:bb:cc:dd:ee:ff` | Wake-on-LAN |
-| `reboot` | `pmash -h host reboot` | Reboot remote |
-| `shutdown` | `pmash -h host shutdown` | Shutdown remote |
-| `service` | `pmash -h host service list` | List systemd services |
-| `session` | `pmash -h host session` | Interactive PTY |
-| `batch` | `pmash -h host batch script.pmash` | Run batch script |
+| `ping` | `pmrsh -h host ping` | Connectivity check |
+| `exec` | `pmrsh -h host exec "ls -la"` | Run command, get output |
+| `info` | `pmrsh -h host info` | JSON: hostname, version, OS |
+| `ps` | `pmrsh -h host ps` | Process list |
+| `kill` | `pmrsh -h host kill 1234` | Kill process by PID |
+| `push` | `pmrsh -h host push /path/file` | Upload file to server |
+| `pull` | `pmrsh -h host pull /path/file` | Download file from server |
+| `write` | `pmrsh -h host write "path:content"` | Create file with content |
+| `cat` | `pmrsh -h host cat /path/file` | Read file content |
+| `mkdir` | `pmrsh -h host mkdir /path/dir` | Create directory |
+| `rm` | `pmrsh -h host rm /path/file` | Delete file |
+| `stat` | `pmrsh -h host stat /path/file` | File size (8-byte LE) |
+| `ls` | `pmrsh -h host ls /path` | List directory |
+| `shell` | `pmrsh -h host shell "cmd"` | Execute in shell session |
+| `sync` | `pmrsh -h host sync /path/file` | Delta pull (Adler32 blocks) |
+| `sync-push` | `pmrsh -h host sync-push /path` | Delta push to server |
+| `forward` | `pmrsh -h host forward 8080:target:80` | Port forwarding (-L) |
+| `socks` | `pmrsh -h host socks 1080` | SOCKS5 proxy (-D) |
+| `wol` | `pmrsh -h host wol aa:bb:cc:dd:ee:ff` | Wake-on-LAN |
+| `reboot` | `pmrsh -h host reboot` | Reboot remote |
+| `shutdown` | `pmrsh -h host shutdown` | Shutdown remote |
+| `service` | `pmrsh -h host service list` | List systemd services |
+| `session` | `pmrsh -h host session` | Interactive PTY |
+| `batch` | `pmrsh -h host batch script.pmrsh` | Run batch script |
 
 ## Server Modes
 
 ```bash
-pmash.exe --listen 8822        # Foreground server
-pmash.exe --daemon 8822        # Background daemon (Linux)
-pmash.exe --version            # Show version
+pmrsh.exe --listen 8822        # Foreground server
+pmrsh.exe --daemon 8822        # Background daemon (Linux)
+pmrsh.exe --version            # Show version
 ```
 
 ## Options
@@ -63,21 +63,21 @@ pmash.exe --version            # Show version
 Generate server certificate (first time):
 ```bash
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-  -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=pmash"
-mkdir -p ~/.pmash/tls
-openssl x509 -in cert.pem -outform DER -out ~/.pmash/tls/cert.der
-openssl ec -in key.pem -outform DER -out ~/.pmash/tls/key.der
+  -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=pmrsh"
+mkdir -p ~/.pmrsh/tls
+openssl x509 -in cert.pem -outform DER -out ~/.pmrsh/tls/cert.der
+openssl ec -in key.pem -outform DER -out ~/.pmrsh/tls/key.der
 ```
 
 TLS activates automatically when cert files exist. Protocol detection (first byte 0x16) allows mixed plain/TLS clients.
 
 ## Authentication
 
-Ed25519 TOFU (Trust On First Use). Keys auto-generated at `~/.pmash/id_ed25519{,.pub}` on first connection.
+Ed25519 TOFU (Trust On First Use). Keys auto-generated at `~/.pmrsh/id_ed25519{,.pub}` on first connection.
 
 ## Config File
 
-`~/.pmash/config` (SSH-style):
+`~/.pmrsh/config` (SSH-style):
 ```
 Host myserver
     HostName 192.168.1.10
@@ -88,29 +88,29 @@ Host myserver
 ## Safety
 
 The server blocks self-destructive commands:
-- `killall pmash`, `pkill pmash`
-- `systemctl stop pmash`, `service pmash stop`
-- `rm /usr/local/bin/pmash`
+- `killall pmrsh`, `pkill pmrsh`
+- `systemctl stop pmrsh`, `service pmrsh stop`
+- `rm /usr/local/bin/pmrsh`
 
 Rate limiting: 5 failed auth attempts → 5 minute ban.
 
 ## Install (Linux)
 
 ```bash
-chmod +x pmash.exe
-sudo cp pmash.exe /usr/local/bin/pmash
-sudo cat > /etc/systemd/system/pmash.service << EOF
+chmod +x pmrsh.exe
+sudo cp pmrsh.exe /usr/local/bin/pmrsh
+sudo cat > /etc/systemd/system/pmrsh.service << EOF
 [Unit]
-Description=pmash remote agent
+Description=pmrsh remote agent
 After=network.target
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/pmash --listen 8822
+ExecStart=/usr/local/bin/pmrsh --listen 8822
 Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
-sudo systemctl enable --now pmash
+sudo systemctl enable --now pmrsh
 ```
 
 Or use the installer: `scripts/pack.sh --platform linux --port 8822`

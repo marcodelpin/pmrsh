@@ -44,7 +44,7 @@ static void srv_do_info(int cfd) {
     pm_memcpy(srv_infobuf, p1, p1l); n = p1l;
     int hl = pm_strlen(srv_hostbuf);
     pm_memcpy(srv_infobuf + n, srv_hostbuf, hl); n += hl;
-    const char *p2 = "\",\"version\":\"pmash 0.2.0\",\"os\":\"Linux\"}";
+    const char *p2 = "\",\"version\":\"pmrsh 0.2.0\",\"os\":\"Linux\"}";
     int p2l = pm_strlen(p2);
     pm_memcpy(srv_infobuf + n, p2, p2l); n += p2l;
     proto_send_msg(cfd, CMD_INFO_RESP, srv_infobuf, n);
@@ -143,16 +143,16 @@ static void srv_do_sync_push(int cfd) {
     *(uint32_t*)sbuf = __builtin_bswap32(sc);
     pm_memcpy(sbuf + 4, sync_sigbuf, sc * 8);
     proto_send_msg(cfd, CMD_SYNC_PUSH_SIGS, sbuf, 4 + sc * 8);
-    int ofd = io_open("/tmp/.pmash_sync.tmp", 1);
+    int ofd = io_open("/tmp/.pmrsh_sync.tmp", 1);
     if (ofd >= 0) {
         int r = sync_apply_delta(cfd, local_fd >= 0 ? local_fd : -1, ofd);
         io_close(ofd);
         if (local_fd >= 0) io_close(local_fd);
         if (r == 0) {
-            sys2(SYS_RENAME, (long)"/tmp/.pmash_sync.tmp", (long)path);
+            sys2(SYS_RENAME, (long)"/tmp/.pmrsh_sync.tmp", (long)path);
             proto_send_msg(cfd, CMD_SYNC_PUSH_OK, 0, 0);
         } else {
-            sys1(SYS_UNLINK, (long)"/tmp/.pmash_sync.tmp");
+            sys1(SYS_UNLINK, (long)"/tmp/.pmrsh_sync.tmp");
             srv_send_error(cfd);
         }
     } else { if (local_fd >= 0) io_close(local_fd); srv_send_error(cfd); }

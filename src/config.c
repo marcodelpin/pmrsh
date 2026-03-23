@@ -1,6 +1,6 @@
 /* config.c — SSH-style config file + port auto-try
  *
- * Config at ~/.pmash/config:
+ * Config at ~/.pmrsh/config:
  *   Host myserver
  *     HostName 192.168.1.10
  *     Port 9822
@@ -25,7 +25,7 @@ static int config_loaded = 0;
 void config_init(const char *home) {
     int hl = pm_strlen(home);
     pm_memcpy(config_path, home, hl);
-    pm_memcpy(config_path + hl, "/.pmash/config", 15);
+    pm_memcpy(config_path + hl, "/.pmrsh/config", 15);
 }
 
 static void config_load(void) {

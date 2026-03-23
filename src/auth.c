@@ -1,7 +1,7 @@
 /* auth.c — Ed25519 TOFU authentication */
 #include "sys.h"
 
-static const char auth_ver[] = "pmash 0.2.0";
+static const char auth_ver[] = "pmrsh 0.2.0";
 static char auth_keydir[128], auth_skpath[160], auth_pkpath[160];
 static uint8_t auth_pk[32], auth_sk[64], auth_nonce[32], auth_sig[64];
 static int auth_loaded = 0;
@@ -9,11 +9,11 @@ static int auth_loaded = 0;
 void auth_resolve_paths(const char *home) {
     int hl = pm_strlen(home);
     pm_memcpy(auth_keydir, home, hl);
-    pm_memcpy(auth_keydir + hl, "/.pmash", 8);
+    pm_memcpy(auth_keydir + hl, "/.pmrsh", 8);
     pm_memcpy(auth_skpath, home, hl);
-    pm_memcpy(auth_skpath + hl, "/.pmash/id_ed25519", 19);
+    pm_memcpy(auth_skpath + hl, "/.pmrsh/id_ed25519", 19);
     pm_memcpy(auth_pkpath, home, hl);
-    pm_memcpy(auth_pkpath + hl, "/.pmash/id_ed25519.pub", 23);
+    pm_memcpy(auth_pkpath + hl, "/.pmrsh/id_ed25519.pub", 23);
 }
 
 int auth_load_or_gen(void) {

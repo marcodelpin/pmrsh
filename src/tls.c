@@ -3,7 +3,7 @@
  * When compiled with -DHAS_TLS and linked with libbearssl.a:
  * - Server: protocol detection (first byte 0x16 → TLS handshake)
  * - Client: TLS when server supports it
- * - Cert/key from $HOME/.pmash/tls/{cert,key}.der
+ * - Cert/key from $HOME/.pmrsh/tls/{cert,key}.der
  *
  * Without -DHAS_TLS: all functions are no-ops, binary stays ~18KB.
  */
@@ -79,9 +79,9 @@ static int cert_loaded = 0;
 static void build_tls_paths(const char *home) {
     int hl = pm_strlen(home);
     pm_memcpy(tls_cert_path, home, hl);
-    pm_memcpy(tls_cert_path + hl, "/.pmash/tls/cert.der", 21);
+    pm_memcpy(tls_cert_path + hl, "/.pmrsh/tls/cert.der", 21);
     pm_memcpy(tls_key_path, home, hl);
-    pm_memcpy(tls_key_path + hl, "/.pmash/tls/key.der", 20);
+    pm_memcpy(tls_key_path + hl, "/.pmrsh/tls/key.der", 20);
 }
 
 static int load_cert_key(void) {
@@ -106,7 +106,7 @@ int tls_client_connect(int fd) {
     br_ssl_client_init_full(&cc, &xc, 0, 0);
     br_ssl_engine_set_x509(&cc.eng, &xwc);
     br_ssl_engine_set_buffer(&cc.eng, iobuf_c, sizeof(iobuf_c), 1);
-    br_ssl_client_reset(&cc, "pmash", 0);
+    br_ssl_client_reset(&cc, "pmrsh", 0);
     br_sslio_init(&ioc_c, &cc.eng, sock_read, &fd_c, sock_write, &fd_c);
     br_sslio_flush(&ioc_c);
     if (br_ssl_engine_current_state(&cc.eng) == BR_SSL_CLOSED) return -1;

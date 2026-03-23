@@ -75,7 +75,7 @@ void recording_start(const char *path) {
     rec_fd = io_open(path, 1);
     if (rec_fd < 0) return;
     /* Header */
-    const char *hdr = "{\"version\":2,\"width\":80,\"height\":24,\"title\":\"pmash\"}\n";
+    const char *hdr = "{\"version\":2,\"width\":80,\"height\":24,\"title\":\"pmrsh\"}\n";
     io_write(rec_fd, hdr, pm_strlen(hdr));
     /* TODO: get actual time for timestamps */
     rec_start_sec = 0;
@@ -103,7 +103,7 @@ void recording_stop(void) {
     if (rec_fd >= 0) { io_close(rec_fd); rec_fd = -1; }
 }
 
-/* === Batch scripting (.pmash files) === */
+/* === Batch scripting (.pmrsh files) === */
 
 int batch_exec(int server_fd, const char *script_path) {
     int fd = io_open(script_path, 0);

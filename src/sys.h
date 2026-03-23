@@ -1,8 +1,8 @@
 /* sys.h — Types, syscall wrappers, constants (no libc)
  * Part of pmash — lightweight remote agent
  */
-#ifndef PMASH_SYS_H
-#define PMASH_SYS_H
+#ifndef PMRSH_SYS_H
+#define PMRSH_SYS_H
 
 #if defined(__COSMOPOLITAN__)
 /* Cosmo provides all types via its headers */
@@ -340,4 +340,4 @@ void fleet_status(void);
 /* IP parser */
 uint32_t parse_ip(const char *s);
 
-#endif /* PMASH_SYS_H */
+#endif /* PMRSH_SYS_H */

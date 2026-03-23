@@ -465,8 +465,8 @@ static int win_exec(const char *cmd, char *outbuf, int outbufsize) {
  * ======================================================================== */
 
 /* OS detection via dual entry points:
- * ELF _start → sets os_type=1, calls pmash_main(stack)
- * PE entry_pe → sets os_type=2, resolves APIs, builds argv, calls pmash_main
+ * ELF _start → sets os_type=1, calls pmrsh_main(stack)
+ * PE entry_pe → sets os_type=2, resolves APIs, builds argv, calls pmrsh_main
  * No syscall instruction used for detection — the entry point IS the detection. */
 
 int detect_os(void) { return os_type; }
@@ -515,7 +515,7 @@ void entry_pe(void) {
     stack[1 + argc + 1] = (long)envp[0];
     stack[1 + argc + 2] = 0;
 
-    pmash_main(stack);
+    pmrsh_main(stack);
     vt.exit_(0);
 }
 

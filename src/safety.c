@@ -9,12 +9,12 @@ static int contains(const char *hay, const char *needle) {
 }
 
 int safety_check(const char *cmd) {
-    if (!contains(cmd, "pmash")) return 0;
-    if (contains(cmd, "systemctl stop pmash")) return 1;
-    if (contains(cmd, "service pmash stop")) return 1;
-    if (contains(cmd, "killall pmash")) return 1;
-    if (contains(cmd, "pkill pmash")) return 1;
-    if (contains(cmd, "rm /usr/local/bin/pmash")) return 1;
+    if (!contains(cmd, "pmrsh")) return 0;
+    if (contains(cmd, "systemctl stop pmrsh")) return 1;
+    if (contains(cmd, "service pmrsh stop")) return 1;
+    if (contains(cmd, "killall pmrsh")) return 1;
+    if (contains(cmd, "pkill pmrsh")) return 1;
+    if (contains(cmd, "rm /usr/local/bin/pmrsh")) return 1;
     return 0;
 }
 

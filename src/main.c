@@ -1,17 +1,17 @@
 /* main.c — Entry point + CLI parsing */
 #include "sys.h"
 
-#define VERSION "pmash 0.2.0 (x86_64)\n"
-#define USAGE   "Usage: pmash -h <host> [-p <port>] <cmd> [arg]\n" \
-                "       pmash --listen <port>\n" \
-                "       pmash --daemon <port>\n" \
-                "       pmash --version\n" \
+#define VERSION "pmrsh 0.2.0 (x86_64)\n"
+#define USAGE   "Usage: pmrsh -h <host> [-p <port>] <cmd> [arg]\n" \
+                "       pmrsh --listen <port>\n" \
+                "       pmrsh --daemon <port>\n" \
+                "       pmrsh --version\n" \
                 "Commands: ping exec info ps kill push pull write shell\n" \
                 "          sync sync-push mkdir rm cat stat ls\n" \
                 "          forward <lport:host:rport> socks <port>\n" \
                 "          wol <mac|host> reboot shutdown service batch session fleet\n"
 
-static void pmash_run(int argc, char **argv, const char *home) {
+static void pmrsh_run(int argc, char **argv, const char *home) {
     auth_resolve_paths(home);
     tls_init(home);
     config_init(home);
@@ -68,7 +68,7 @@ void mainCRTStartup(void) {
     static char home[260];
     DWORD hl = GetEnvironmentVariableA("USERPROFILE", home, 260);
     if (hl == 0) { home[0] = 'C'; home[1] = ':'; home[2] = 0; }
-    pmash_run(argc, argv, home);
+    pmrsh_run(argc, argv, home);
 }
 
 #elif defined(__COSMOPOLITAN__)
@@ -78,19 +78,19 @@ int main(int argc, char **argv) {
     const char *home = getenv("HOME");
     if (!home) home = getenv("USERPROFILE");
     if (!home) home = "/tmp";
-    pmash_run(argc, argv, home);
+    pmrsh_run(argc, argv, home);
     return 0;
 }
 
 #else /* Linux (no libc) */
 
-__attribute__((used)) void pmash_main(long *stack);
+__attribute__((used)) void pmrsh_main(long *stack);
 
 __attribute__((naked)) void _start(void) {
-    __asm__("mov %rsp, %rdi\n\tjmp pmash_main");
+    __asm__("mov %rsp, %rdi\n\tjmp pmrsh_main");
 }
 
-__attribute__((used)) void pmash_main(long *stack) {
+__attribute__((used)) void pmrsh_main(long *stack) {
     int argc = (int)stack[0];
     char **argv = (char**)(stack + 1);
     char **envp = argv + argc + 1;
@@ -98,7 +98,7 @@ __attribute__((used)) void pmash_main(long *stack) {
     for (char **e = envp; *e; e++) {
         if (pm_memcmp(*e, "HOME=", 5) == 0) { home = *e + 5; break; }
     }
-    pmash_run(argc, argv, home);
+    pmrsh_run(argc, argv, home);
 }
 
 #endif

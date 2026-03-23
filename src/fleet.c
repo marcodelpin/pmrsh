@@ -8,7 +8,7 @@ static char known_hosts_path[200];
 void known_hosts_init(const char *home) {
     int hl = pm_strlen(home);
     pm_memcpy(known_hosts_path, home, hl);
-    pm_memcpy(known_hosts_path + hl, "/.pmash/known_hosts", 20);
+    pm_memcpy(known_hosts_path + hl, "/.pmrsh/known_hosts", 20);
 }
 
 /* Store fingerprint: "host:port fingerprint\n" */

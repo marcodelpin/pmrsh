@@ -1,4 +1,4 @@
-1 ICON "pmash.ico"
+1 ICON "pmrsh.ico"
 
 1 VERSIONINFO
 FILEVERSION 0,2,0,0
@@ -8,11 +8,11 @@ BEGIN
     BEGIN
         BLOCK "040904E4"
         BEGIN
-            VALUE "FileDescription", "pmash - lightweight remote agent"
+            VALUE "FileDescription", "pmrsh - lightweight remote agent"
             VALUE "FileVersion", "0.2.0"
-            VALUE "InternalName", "pmash"
-            VALUE "OriginalFilename", "pmash.exe"
-            VALUE "ProductName", "pmash"
+            VALUE "InternalName", "pmrsh"
+            VALUE "OriginalFilename", "pmrsh.exe"
+            VALUE "ProductName", "pmrsh"
             VALUE "ProductVersion", "0.2.0"
         END
     END

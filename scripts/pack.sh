@@ -1,14 +1,14 @@
 #!/bin/bash
 # =============================================================================
-# pack.sh — Generate self-extracting pmash installer
-# Part of pmash — lightweight remote agent
+# pack.sh — Generate self-extracting pmrsh installer
+# Part of pmrsh — lightweight remote agent
 # =============================================================================
 # Usage:
 #   ./pack.sh --platform linux  [--key <pubkey_file>] [--port 8822] [-o output]
 #   ./pack.sh --platform windows [--key <pubkey_file>] [--port 8822] [-o output]
 #
-# Linux output:  pmash-<version>-linux-install.sh  (self-extracting)
-# Windows output: pmash-<version>-windows-install.exe (NSIS, needs makensis)
+# Linux output:  pmrsh-<version>-linux-install.sh  (self-extracting)
+# Windows output: pmrsh-<version>-windows-install.exe (NSIS, needs makensis)
 # =============================================================================
 
 set -e
@@ -38,8 +38,8 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --platform  Target platform: linux or windows"
             echo "  --key       Path to Ed25519 public key file (can specify multiple)"
-            echo "  --port      Port for pmash service (default: 8822)"
-            echo "  --binary    Path to pmash binary (auto-detected if not specified)"
+            echo "  --port      Port for pmrsh service (default: 8822)"
+            echo "  --binary    Path to pmrsh binary (auto-detected if not specified)"
             echo "  --rdv       Rendezvous server address (host:port)"
             echo "  -o          Output file path"
             exit 0
@@ -60,8 +60,8 @@ find_binary() {
         return
     fi
 
-    local name="pmash"
-    [[ "$PLATFORM" == "windows" ]] && name="pmash.exe"
+    local name="pmrsh"
+    [[ "$PLATFORM" == "windows" ]] && name="pmrsh.exe"
 
     # Check common locations
     for p in \
@@ -75,7 +75,7 @@ find_binary() {
         fi
     done
 
-    echo "Error: cannot find pmash binary. Use --binary to specify." >&2
+    echo "Error: cannot find pmrsh binary. Use --binary to specify." >&2
     exit 1
 }
 
@@ -101,8 +101,8 @@ build_authorized_keys() {
     if [[ ${#KEYS[@]} -eq 0 ]]; then
         for default_key in \
             "$HOME/.ssh/id_ed25519.pub" \
-            "$HOME/.pmash/id_ed25519.pub" \
-            "/etc/pmash/id_ed25519.pub"; do
+            "$HOME/.pmrsh/id_ed25519.pub" \
+            "/etc/pmrsh/id_ed25519.pub"; do
             if [[ -f "$default_key" ]]; then
                 cat "$default_key" >> "$tmpkeys"
                 echo "" >> "$tmpkeys"
@@ -123,13 +123,13 @@ echo "  authorized_keys: $KEY_COUNT key(s)"
 # Linux: self-extracting .sh
 # =============================================================================
 generate_linux() {
-    local outfile="${OUTPUT:-pmash-${VERSION}-linux-install.sh}"
+    local outfile="${OUTPUT:-pmrsh-${VERSION}-linux-install.sh}"
 
     # Generate inner install.sh
     local install_script="#!/bin/bash
 set -e
 
-echo \"=== pmash Installer (v${VERSION}) ===\"
+echo \"=== pmrsh Installer (v${VERSION}) ===\"
 echo \"Port: ${PORT}\"
 echo
 
@@ -139,23 +139,23 @@ if [ \"\$(id -u)\" -ne 0 ]; then
 fi
 
 # Install binary
-install -m 755 \"\$(dirname \"\$0\")/pmash\" /usr/local/bin/pmash
-echo \"Binary installed: /usr/local/bin/pmash\"
+install -m 755 \"\$(dirname \"\$0\")/pmrsh\" /usr/local/bin/pmrsh
+echo \"Binary installed: /usr/local/bin/pmrsh\"
 
 # Install keys
-mkdir -p /etc/pmash
-install -m 600 \"\$(dirname \"\$0\")/authorized_keys\" /etc/pmash/authorized_keys
-echo \"Config directory: /etc/pmash\"
+mkdir -p /etc/pmrsh
+install -m 600 \"\$(dirname \"\$0\")/authorized_keys\" /etc/pmrsh/authorized_keys
+echo \"Config directory: /etc/pmrsh\"
 
 # Create systemd service
-cat > /etc/systemd/system/pmash.service << 'UNIT'
+cat > /etc/systemd/system/pmrsh.service << 'UNIT'
 [Unit]
-Description=pmash remote agent
+Description=pmrsh remote agent
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/pmash --listen ${PORT}
+ExecStart=/usr/local/bin/pmrsh --listen ${PORT}
 Restart=always
 RestartSec=5
 KillSignal=SIGTERM
@@ -165,7 +165,7 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now pmash
+systemctl enable --now pmrsh
 echo \"Service started.\"
 
 # Install avahi for DNS auto-discovery
@@ -177,38 +177,38 @@ fi
 
 echo
 echo \"=== Installation complete ===\"
-echo \"pmash listening on port ${PORT}\"
-echo \"Connect with: pmash -h \$(hostname) ping\"
+echo \"pmrsh listening on port ${PORT}\"
+echo \"Connect with: pmrsh -h \$(hostname) ping\"
 "
 
     # Build tar.gz payload
     local tmpdir=$(mktemp -d)
     trap "rm -rf '$tmpdir'" EXIT
 
-    cp "$BINARY_PATH" "$tmpdir/pmash"
-    chmod 755 "$tmpdir/pmash"
+    cp "$BINARY_PATH" "$tmpdir/pmrsh"
+    chmod 755 "$tmpdir/pmrsh"
     echo "$AUTH_KEYS" > "$tmpdir/authorized_keys"
     chmod 600 "$tmpdir/authorized_keys"
     echo "$install_script" > "$tmpdir/install.sh"
     chmod 755 "$tmpdir/install.sh"
 
     local tar_payload=$(mktemp)
-    (cd "$tmpdir" && tar czf "$tar_payload" pmash authorized_keys install.sh)
+    (cd "$tmpdir" && tar czf "$tar_payload" pmrsh authorized_keys install.sh)
 
     # Write self-extracting script
     cat > "$outfile" << 'SFX_HEADER'
 #!/bin/bash
-# pmash — Self-extracting installer
+# pmrsh — Self-extracting installer
 set -e
 
-echo "=== pmash Installer ==="
+echo "=== pmrsh Installer ==="
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "ERROR: Run as root: sudo $0"
     exit 1
 fi
 
-TMPDIR=$(mktemp -d /tmp/pmash-install.XXXXXX)
+TMPDIR=$(mktemp -d /tmp/pmrsh-install.XXXXXX)
 trap "rm -rf '$TMPDIR'" EXIT
 
 ARCHIVE=$(awk '/^__ARCHIVE_BELOW__$/ {print NR + 1; exit 0;}' "$0")
@@ -238,7 +238,7 @@ SFX_HEADER
 # Windows: NSIS installer
 # =============================================================================
 generate_windows() {
-    local outfile="${OUTPUT:-pmash-${VERSION}-windows-install.exe}"
+    local outfile="${OUTPUT:-pmrsh-${VERSION}-windows-install.exe}"
 
     # Find makensis
     local makensis=""
@@ -264,14 +264,14 @@ generate_windows() {
     trap "rm -rf '$tmpdir'" EXIT
 
     # Copy files to staging
-    cp "$BINARY_PATH" "$tmpdir/pmash.exe"
+    cp "$BINARY_PATH" "$tmpdir/pmrsh.exe"
     echo "$AUTH_KEYS" > "$tmpdir/authorized_keys"
 
     # Generate install.bat
     cat > "$tmpdir/install.bat" << INSTALLBAT
 @echo off
 setlocal
-echo === pmash Installer (v${VERSION}) ===
+echo === pmrsh Installer (v${VERSION}) ===
 echo Port: ${PORT}
 echo.
 
@@ -283,40 +283,40 @@ if %errorlevel% neq 0 (
 )
 
 echo Stopping existing services...
-net stop pmash >nul 2>&1
+net stop pmrsh >nul 2>&1
 net stop mrsh >nul 2>&1
-sc delete pmash >nul 2>&1
-taskkill /F /IM pmash.exe >nul 2>&1
+sc delete pmrsh >nul 2>&1
+taskkill /F /IM pmrsh.exe >nul 2>&1
 timeout /t 2 /nobreak >nul
 
-set DATADIR=C:\\ProgramData\\pmash
+set DATADIR=C:\\ProgramData\\pmrsh
 if not exist "%DATADIR%" mkdir "%DATADIR%"
 
-copy /Y "%~dp0pmash.exe" "%DATADIR%\\pmash.exe"
+copy /Y "%~dp0pmrsh.exe" "%DATADIR%\\pmrsh.exe"
 copy /Y "%~dp0authorized_keys" "%DATADIR%\\authorized_keys"
 
 echo Installing service...
-"%DATADIR%\\pmash.exe" --install --port ${PORT}
+"%DATADIR%\\pmrsh.exe" --install --port ${PORT}
 
 echo Configuring firewall...
-netsh advfirewall firewall delete rule name="pmash" >nul 2>&1
-netsh advfirewall firewall add rule name="pmash" dir=in action=allow protocol=TCP localport=${PORT}
+netsh advfirewall firewall delete rule name="pmrsh" >nul 2>&1
+netsh advfirewall firewall add rule name="pmrsh" dir=in action=allow protocol=TCP localport=${PORT}
 
 echo Starting service...
-net start pmash
+net start pmrsh
 
 echo.
 echo === Installation complete ===
-echo pmash listening on port ${PORT}
+echo pmrsh listening on port ${PORT}
 INSTALLBAT
 
     # Generate NSIS script
     cat > "$tmpdir/installer.nsi" << 'NSIEOF'
 !include "MUI2.nsh"
 
-Name "pmash ${VERSION}"
+Name "pmrsh ${VERSION}"
 OutFile "${OUTFILE}"
-InstallDir "$PROGRAMDATA\pmash"
+InstallDir "$PROGRAMDATA\pmrsh"
 RequestExecutionLevel admin
 ShowInstDetails show
 
@@ -327,34 +327,34 @@ Section "Install"
     SetOutPath $INSTDIR
 
     ; Stop existing
-    nsExec::ExecToStack 'net stop pmash'
+    nsExec::ExecToStack 'net stop pmrsh'
     Pop $0
     nsExec::ExecToStack 'net stop mrsh'
     Pop $0
-    nsExec::ExecToStack 'sc delete pmash'
+    nsExec::ExecToStack 'sc delete pmrsh'
     Pop $0
-    nsExec::ExecToStack 'taskkill /F /IM pmash.exe'
+    nsExec::ExecToStack 'taskkill /F /IM pmrsh.exe'
     Pop $0
     Sleep 2000
 
     ; Install files
-    File "pmash.exe"
+    File "pmrsh.exe"
     File "authorized_keys"
 
     ; Install service
-    nsExec::ExecToStack '"$INSTDIR\pmash.exe" --install --port ${PORT}'
+    nsExec::ExecToStack '"$INSTDIR\pmrsh.exe" --install --port ${PORT}'
     Pop $0
     DetailPrint "Service installed."
 
     ; Firewall
-    nsExec::ExecToStack 'netsh advfirewall firewall delete rule name="pmash"'
+    nsExec::ExecToStack 'netsh advfirewall firewall delete rule name="pmrsh"'
     Pop $0
-    nsExec::ExecToStack 'netsh advfirewall firewall add rule name="pmash" dir=in action=allow protocol=TCP localport=${PORT}'
+    nsExec::ExecToStack 'netsh advfirewall firewall add rule name="pmrsh" dir=in action=allow protocol=TCP localport=${PORT}'
     Pop $0
     DetailPrint "Firewall rule added."
 
     ; Start
-    nsExec::ExecToStack 'net start pmash'
+    nsExec::ExecToStack 'net start pmrsh'
     Pop $0
     DetailPrint "Service started on port ${PORT}."
 SectionEnd
@@ -382,7 +382,7 @@ NSIEOF
 # Main
 # =============================================================================
 
-echo "=== pmash pack v${VERSION} ==="
+echo "=== pmrsh pack v${VERSION} ==="
 echo "  platform: $PLATFORM"
 echo "  port: $PORT"
 
