@@ -39,82 +39,123 @@ static uint64_t elfsym(const uint8_t *e, long esz, const char *name) {
     return 0;
 }
 
-/* Build minimal .rsrc for icon */
+/* Build .rsrc section for PE icon embedding.
+ *
+ * PE resource tree for icon:
+ *   Root DIR → [RT_ICON(3)]    → [ID 1..N] → [lang 0x0409] → DATA_ENTRY → raw icon
+ *            → [RT_GROUP_ICON(14)] → [ID 1] → [lang 0x0409] → DATA_ENTRY → GRPICONDIR
+ *
+ * Each node is a 16-byte DIR header + 8-byte entries.
+ * Leaf entries point to 16-byte DATA_ENTRY structs.
+ * DATA_ENTRY has RVA to actual data.
+ */
 static int build_rsrc(uint8_t *out, uint32_t rva, const uint8_t *ico, long isz) {
-    if(!ico||isz<22) return 0;
-    uint16_t n=*(uint16_t*)(ico+4);
-    if(!n||n>10) return 0;
-    /* Simplified: single icon resource.
-     * Structure: root dir → RT_GROUP_ICON(14) → ID(1) → lang → data
-     *           root dir → RT_ICON(3) → per-image → lang → data */
-    int p=0;
-    /* Root: 2 type entries */
-    memset(out,0,65536);
-    *(uint16_t*)(out+p+12)=2; p+=16; /* RES_DIR header */
-    int e_icon_p=p; p+=8; /* RT_ICON entry */
-    int e_group_p=p; p+=8; /* RT_GROUP_ICON entry */
-    /* RT_ICON subdir */
-    int icon_dir_p=p;
-    *(uint32_t*)(out+e_icon_p)=3; *(uint32_t*)(out+e_icon_p+4)=p|0x80000000;
-    *(uint16_t*)(out+p+12)=n; p+=16;
-    int icon_entries_p=p; p+=n*8;
-    /* Per-icon lang subdirs */
-    int icon_lang_p[10];
-    for(int i=0;i<n;i++){
-        icon_lang_p[i]=p;
-        *(uint32_t*)(out+icon_entries_p+i*8)=i+1;
-        *(uint32_t*)(out+icon_entries_p+i*8+4)=p|0x80000000;
-        *(uint16_t*)(out+p+12)=1; p+=16;
-        *(uint32_t*)(out+p)=0x0409; p+=8; /* lang entry, offset filled later */
+    if (!ico || isz < 22) return 0;
+    uint16_t n = *(uint16_t*)(ico + 4); /* number of icon images */
+    if (!n || n > 10) return 0;
+
+    memset(out, 0, 65536);
+    int W = 0; /* write cursor */
+
+    /* === Phase 1: directories + entries (tree structure) === */
+
+    /* Root directory: 2 type entries (RT_ICON=3, RT_GROUP_ICON=14) */
+    int root = W;
+    *(uint16_t*)(out+W+12) = 0;                  /* NumberOfNamedEntries = 0 */
+    *(uint16_t*)(out+W+14) = 2;                  /* NumberOfIdEntries = 2 */
+    W += 16;
+    int root_e0 = W; W += 8;                     /* entry for RT_ICON */
+    int root_e1 = W; W += 8;                     /* entry for RT_GROUP_ICON */
+
+    /* RT_ICON subdir: N entries (one per icon image) */
+    int icon_dir = W;
+    *(uint32_t*)(out+root_e0) = 3;               /* ID = RT_ICON */
+    *(uint32_t*)(out+root_e0+4) = W | 0x80000000;/* offset to subdir */
+    *(uint16_t*)(out+W+14) = n; W += 16;          /* DIR: N ID entries */
+    int icon_id_entries = W; W += n * 8;
+
+    /* Per-icon language subdirs */
+    int icon_lang_entry[10]; /* offset of each language ENTRY (where we'll set data_entry offset) */
+    for (int i = 0; i < n; i++) {
+        int lang_dir = W;
+        *(uint32_t*)(out+icon_id_entries+i*8) = i + 1;        /* ID = i+1 */
+        *(uint32_t*)(out+icon_id_entries+i*8+4) = W | 0x80000000; /* → lang subdir */
+        *(uint16_t*)(out+W+14) = 1; W += 16;                   /* DIR: 1 ID entry */
+        icon_lang_entry[i] = W;
+        *(uint32_t*)(out+W) = 0x0409;                         /* lang = en-US */
+        /* out+W+4 = offset to DATA_ENTRY — filled in phase 2 */
+        W += 8;
     }
-    /* RT_GROUP_ICON subdir */
-    int group_dir_p=p;
-    *(uint32_t*)(out+e_group_p)=14; *(uint32_t*)(out+e_group_p+4)=p|0x80000000;
-    *(uint16_t*)(out+p+12)=1; p+=16;
-    *(uint32_t*)(out+p)=1; *(uint32_t*)(out+p+4)=p+8|0x80000000; p+=8;
-    /* group lang subdir */
-    *(uint16_t*)(out+p+12)=1; p+=16;
-    *(uint32_t*)(out+p)=0x0409; int group_lang_data_p=p+4; p+=8;
-    /* Data entries for icons */
-    p=ALIGN(p,4);
-    for(int i=0;i<n;i++){
-        /* Set lang entry offset to this data entry */
-        *(uint32_t*)(out+icon_lang_p[i]+16+4)=p; /* lang entry's offset */
-        uint32_t img_sz=*(uint32_t*)(ico+6+i*16+8);
-        uint32_t img_off=*(uint32_t*)(ico+6+i*16+12);
-        *(uint32_t*)(out+p)=rva+ALIGN(p+((n+1)*16),4); /* placeholder, fix below */
-        *(uint32_t*)(out+p+4)=img_sz;
-        p+=16;
+
+    /* RT_GROUP_ICON subdir: 1 entry */
+    int group_dir = W;
+    *(uint32_t*)(out+root_e1) = 14;              /* ID = RT_GROUP_ICON */
+    *(uint32_t*)(out+root_e1+4) = W | 0x80000000;
+    *(uint16_t*)(out+W+14) = 1; W += 16;          /* DIR: 1 ID entry */
+    int group_id_entry = W;
+    *(uint32_t*)(out+W) = 1; W += 8;             /* ID = 1 */
+
+    /* Group language subdir */
+    int group_lang_dir = W;
+    *(uint32_t*)(out+group_id_entry+4) = W | 0x80000000;
+    *(uint16_t*)(out+W+12) = 1; W += 16;
+    int group_lang_entry = W;
+    *(uint32_t*)(out+W) = 0x0409; W += 8;
+
+    /* === Phase 2: DATA_ENTRY structs === */
+
+    /* Icon data entries (one per image) */
+    int icon_de[10];
+    for (int i = 0; i < n; i++) {
+        icon_de[i] = W;
+        *(uint32_t*)(out+icon_lang_entry[i]+4) = W; /* lang entry → data entry (NO high bit) */
+        /* DATA_ENTRY: data_rva(4), size(4), codepage(4), reserved(4) */
+        uint32_t img_sz = *(uint32_t*)(ico + 6 + i*16 + 8);
+        *(uint32_t*)(out+W+4) = img_sz;    /* size */
+        /* data_rva filled in phase 3 */
+        W += 16;
     }
-    /* Group data entry */
-    *(uint32_t*)(out+group_lang_data_p)=p;
-    int group_de_p=p;
-    *(uint32_t*)(out+p+4)=0; /* size filled later */
-    p+=16;
+
+    /* Group icon data entry */
+    int group_de = W;
+    *(uint32_t*)(out+group_lang_entry+4) = W;
+    /* size filled in phase 3 */
+    W += 16;
+
+    /* === Phase 3: raw data === */
+    W = ALIGN(W, 4);
+
     /* Icon image data */
-    p=ALIGN(p,4);
-    for(int i=0;i<n;i++){
-        uint32_t img_sz=*(uint32_t*)(ico+6+i*16+8);
-        uint32_t img_off=*(uint32_t*)(ico+6+i*16+12);
-        /* Fix data entry RVA */
-        int de_p=ALIGN(icon_lang_p[n-1]+16+8+(n>0?0:0),4); /* find data entry... */
-        /* Actually, let's just recalculate: data entries start after all subdirs */
-        /* This is getting complex. Simplified: embed icon as flat data */
-        memcpy(out+p, ico+img_off, img_sz);
-        /* Fix the RVA in the data entry for this icon */
-        /* Data entries are at known positions from the loop above */
-        p+=ALIGN(img_sz,4);
+    for (int i = 0; i < n; i++) {
+        uint32_t img_sz = *(uint32_t*)(ico + 6 + i*16 + 8);
+        uint32_t img_off = *(uint32_t*)(ico + 6 + i*16 + 12);
+        *(uint32_t*)(out+icon_de[i]) = rva + W;  /* fix DATA_ENTRY.data_rva */
+        memcpy(out + W, ico + img_off, img_sz);
+        W += ALIGN(img_sz, 4);
     }
-    /* Group icon directory data */
-    int gd_start=p;
-    *(uint32_t*)(out+group_de_p)=rva+p; /* RVA */
-    *(uint16_t*)(out+p)=0; *(uint16_t*)(out+p+2)=1; *(uint16_t*)(out+p+4)=n; p+=6;
-    for(int i=0;i<n;i++){
-        uint8_t *ide=(uint8_t*)(ico+6+i*16);
-        memcpy(out+p,ide,12); *(uint16_t*)(out+p+12)=i+1; p+=14;
+
+    /* GRPICONDIR data */
+    int grp_start = W;
+    *(uint32_t*)(out+group_de) = rva + W;        /* fix DATA_ENTRY.data_rva */
+    *(uint16_t*)(out+W) = 0;                     /* reserved */
+    *(uint16_t*)(out+W+2) = 1;                   /* type = icon */
+    *(uint16_t*)(out+W+4) = n;                   /* count */
+    W += 6;
+    for (int i = 0; i < n; i++) {
+        uint8_t *ide = (uint8_t*)(ico + 6 + i*16);
+        out[W] = ide[0];                         /* width */
+        out[W+1] = ide[1];                       /* height */
+        out[W+2] = ide[2];                       /* color count */
+        out[W+3] = 0;                            /* reserved */
+        *(uint16_t*)(out+W+4) = *(uint16_t*)(ide+4); /* planes */
+        *(uint16_t*)(out+W+6) = *(uint16_t*)(ide+6); /* bit count */
+        *(uint32_t*)(out+W+8) = *(uint32_t*)(ide+8); /* bytes in resource */
+        *(uint16_t*)(out+W+12) = i + 1;          /* ID */
+        W += 14;
     }
-    *(uint32_t*)(out+group_de_p+4)=p-gd_start;
-    return ALIGN(p,FA);
+    *(uint32_t*)(out+group_de+4) = W - grp_start; /* fix size */
+
+    return ALIGN(W, FA);
 }
 
 int main(int argc, char **argv) {
