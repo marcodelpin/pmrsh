@@ -38,16 +38,17 @@ tls: clean $(OBJS)
 src/%.o: src/%.c src/sys.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Cross-compile for Windows (MinGW)
+# Cross-compile for Windows (MinGW) with icon
 windows:
+	x86_64-w64-mingw32-windres res/pmash.rc -O coff -o res/pmash.res
 	x86_64-w64-mingw32-gcc -Os -fno-stack-protector -ffunction-sections -fdata-sections \
 		-fno-unwind-tables -fno-asynchronous-unwind-tables -flto -Isrc -D_WIN32 \
 		-nostartfiles -Wl,--gc-sections -s \
-		-o pmash.exe $(SRCS) -lws2_32 -lkernel32
+		-o pmash.exe $(SRCS) res/pmash.res -lws2_32 -lkernel32
 	@echo "Built: pmash.exe ($$(wc -c < pmash.exe) bytes)"
 
 test: pmash
 	@./pmash --version
 
 clean:
-	rm -f pmash pmash.exe src/*.o
+	rm -f pmash pmash.exe src/*.o res/*.res
