@@ -1,215 +1,193 @@
 #!/usr/bin/env python3
-"""mkpolyglot.py — Transform ELF binary into MZ+ELF polyglot
+"""mkpolyglot.py — ELF → MZ/PE+ELF polyglot (all segments mapped)
 
-Creates a binary that:
-  - Starts with MZ (0x4D5A) — Windows PE loader recognizes it
-  - Contains a PE header pointing to our code
-  - The first bytes (MZ = dec ebp; pop rdx) are valid x86_64 instructions
-  - Followed by a jmp to the real entry point (skipping PE headers)
-  - On Linux: needs binfmt_misc registration OR ape-loader
+Maps every ELF LOAD segment as a PE section so Windows PE loader
+creates the same memory layout as the Linux ELF loader.
 
-Usage: python3 mkpolyglot.py <input.elf> <output.com> [icon.ico]
+Usage: python3 mkpolyglot.py <input.elf> <output.com>
 """
 
 import struct, sys, os
 
+def align(x, a):
+    return (x + a - 1) & ~(a - 1)
+
 def main():
     if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} <input.elf> <output.com> [icon.ico]")
+        print(f"Usage: {sys.argv[0]} <input.elf> <output.com>")
         sys.exit(1)
 
-    elf_path = sys.argv[1]
-    out_path = sys.argv[2]
-    ico_path = sys.argv[3] if len(sys.argv) > 3 else None
+    with open(sys.argv[1], 'rb') as f:
+        elf = bytearray(f.read())
 
-    with open(elf_path, 'rb') as f:
-        elf = f.read()
+    assert elf[:4] == b'\x7fELF', "Not ELF"
 
-    # Verify ELF
-    assert elf[:4] == b'\x7fELF', "Not an ELF file"
-
-    # Parse ELF entry point
     entry = struct.unpack('<Q', elf[24:32])[0]
     phoff = struct.unpack('<Q', elf[32:40])[0]
-    print(f"ELF: {len(elf)} bytes, entry=0x{entry:x}")
-
-    # Find .text LOAD segment (first executable)
     phnum = struct.unpack('<H', elf[56:58])[0]
     phsize = struct.unpack('<H', elf[54:56])[0]
-    text_offset = 0
-    text_vaddr = 0
-    text_filesz = 0
+
+    # Parse ALL LOAD segments
+    segments = []
     for i in range(phnum):
         ph = elf[phoff + i*phsize : phoff + (i+1)*phsize]
-        p_type, p_flags = struct.unpack('<II', ph[:8])
+        p_type = struct.unpack('<I', ph[:4])[0]
+        p_flags = struct.unpack('<I', ph[4:8])[0]
         p_offset, p_vaddr, p_paddr, p_filesz, p_memsz = struct.unpack('<QQQQQ', ph[8:48])
-        if p_type == 1 and (p_flags & 1):  # PT_LOAD + PF_X
-            text_offset = p_offset
-            text_vaddr = p_vaddr
-            text_filesz = p_filesz
-            break
+        p_align = struct.unpack('<Q', ph[48:56])[0]
+        if p_type == 1:  # PT_LOAD
+            # PE section characteristics from ELF flags
+            chars = 0x40000000  # IMAGE_SCN_MEM_READ
+            name = ".data"
+            if p_flags & 1:  # PF_X
+                chars |= 0x20000020  # IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_CNT_CODE
+                name = ".text"
+            if p_flags & 2:  # PF_W
+                chars |= 0x80000000 | 0x00000040  # MEM_WRITE | INITIALIZED_DATA
+                name = ".data"
+            elif not (p_flags & 1):
+                chars |= 0x00000040  # INITIALIZED_DATA
+                name = ".rdata"
 
-    print(f"  .text: offset=0x{text_offset:x} vaddr=0x{text_vaddr:x} size=0x{text_filesz:x}")
-    entry_file_offset = text_offset + (entry - text_vaddr)
-    print(f"  entry file offset: 0x{entry_file_offset:x}")
+            segments.append({
+                'name': name,
+                'vaddr': p_vaddr,
+                'memsz': p_memsz,
+                'offset': p_offset,
+                'filesz': p_filesz,
+                'chars': chars,
+            })
+            print(f"  LOAD: vaddr=0x{p_vaddr:x} filesz=0x{p_filesz:x} memsz=0x{p_memsz:x} flags={p_flags} → {name}")
 
-    # Read icon if provided
-    ico_data = b''
-    if ico_path and os.path.exists(ico_path):
-        with open(ico_path, 'rb') as f:
-            ico_data = f.read()
-        print(f"  icon: {len(ico_data)} bytes")
+    if not segments:
+        print("No LOAD segments!"); sys.exit(1)
 
-    # === Build polyglot ===
-    #
-    # Layout:
-    # [0x000] MZ + jmp (valid x86_64: dec ebp; pop rdx; jmp rel32)
-    # [0x004] DOS header padding
-    # [0x03C] e_lfanew → PE header offset
-    # [0x040..0x07F] More header / padding
-    # [0x080] PE header (PE\0\0 + COFF + Optional + Sections)
-    # [0x200] Original ELF data (PE .text section maps here)
-    #
-    # The trick: bytes 0x000-0x001 are 'MZ' which Windows needs.
-    # On Linux, these bytes are NOT valid ELF magic, so the kernel
-    # won't execute it directly. We need binfmt_misc or ape-loader.
-    #
-    # HOWEVER: we can make it work WITHOUT binfmt_misc by putting
-    # a valid ELF header at the very start and making the MZ header
-    # be part of the ELF padding. The problem: ELF magic is 7F 45 4C 46
-    # and MZ magic is 4D 5A — they can't overlap.
-    #
-    # Practical solution: output has MZ first. On Linux, use:
-    #   1) chmod +x pmash.com && ./pmash.com  (needs binfmt_misc)
-    #   2) OR: ape-loader pmash.com           (Cosmopolitan's loader)
-    #   3) OR: install APE binfmt_misc entry
+    # Skip first LOAD if it's at image base with only headers (RVA=0 conflicts with PE headers)
+    image_base = segments[0]['vaddr'] & ~0xFFF
+    if segments[0]['vaddr'] == image_base and segments[0]['filesz'] < 0x1000:
+        print(f"  Skipping first LOAD (ELF headers at base, RVA=0)")
+        segments = segments[1:]
+    entry_rva = entry - image_base
+    print(f"\nELF: {len(elf)} bytes, entry=0x{entry:x}, image_base=0x{image_base:x}, entry_rva=0x{entry_rva:x}")
+    print(f"  {len(segments)} LOAD segments")
 
+    FILE_ALIGN = 512
+    SECT_ALIGN = 4096
+
+    # PE header size: DOS(64) + pad + PE(24) + OptionalPE32+(112) + sections(40*N)
     pe_offset = 0x80
-    headers_size = 0x200  # aligned to 512
-    file_align = 512
-    sect_align = 4096
+    opt_size = 112  # no data directories
+    sect_table_offset = pe_offset + 4 + 20 + opt_size
+    headers_end = sect_table_offset + 40 * len(segments)
+    headers_size = align(headers_end, FILE_ALIGN)
 
-    # Round ELF to file alignment
-    padded_elf = elf + b'\0' * (file_align - (len(elf) % file_align)) if len(elf) % file_align else elf
+    # Calculate total image size
+    max_rva = 0
+    for seg in segments:
+        rva = seg['vaddr'] - image_base
+        end = rva + align(seg['memsz'], SECT_ALIGN)
+        if end > max_rva:
+            max_rva = end
+    image_size = align(max_rva, SECT_ALIGN)
 
-    # PE section maps the ELF's .text at its original virtual address
-    # ELF .text is at vaddr text_vaddr (0x401000), image base is 0x400000
-    # So code_rva = text_vaddr - image_base = 0x1000
-    image_base = 0x400000
-    code_rva = text_vaddr - image_base  # 0x1000
-    # Entry RVA = entry vaddr - image_base
-    entry_rva = entry - image_base  # 0x1f9b
+    # Calculate file layout: each segment at its original ELF offset + headers_size
+    # BUT PE requires sections to be in order and file-aligned.
+    # Simplest: put the entire ELF file after headers, map each segment from it.
 
-    image_size = code_rva + len(padded_elf) + sect_align
-    image_size = (image_size + sect_align - 1) & ~(sect_align - 1)
+    elf_file_offset = headers_size  # entire ELF starts here
+    total_file_size = elf_file_offset + len(elf)
+    total_file_size = align(total_file_size, FILE_ALIGN)
 
-    out = bytearray(headers_size + len(padded_elf))
+    out = bytearray(total_file_size)
 
-    # DOS header
-    struct.pack_into('<H', out, 0, 0x5A4D)  # e_magic = MZ
-
-    # jmp over headers (offset 2..5)
-    # Short jump: EB xx (2 bytes) or near jump: E9 xx xx xx xx (5 bytes)
-    # Jump from offset 2 to offset 0x200 = distance 0x1FE - 5 = 0x1F9
-    # Actually this is inside the e_cblp field. Let's put the jump target carefully.
-    # The MZ bytes 4D 5A decode as: dec ebp (4D, REX prefix ignored in 64-bit); pop rdx (5A)
-    # Then we can put: jmp rel32 → E9 xx xx xx xx
+    # === DOS header ===
+    struct.pack_into('<H', out, 0, 0x5A4D)  # MZ
     out[2] = 0xE9  # jmp rel32
-    jmp_target = headers_size - 7  # relative to after the 5-byte jmp (offset 7)
+    # Jump target: skip to where the ELF entry point code lives
+    # entry is at file offset = elf_file_offset + (entry - segments[0].vaddr + segments[0].offset)
+    # But simpler: jump to elf_file_offset which is the ELF header, won't help.
+    # Actually on Linux this file won't be executed directly (not ELF at offset 0).
+    # The jmp is for DOS compatibility only. Not needed for our use case.
+    jmp_target = elf_file_offset - 7  # relative to offset 7 (after 5-byte jmp + 2-byte MZ)
     struct.pack_into('<i', out, 3, jmp_target)
+    struct.pack_into('<I', out, 0x3C, pe_offset)  # e_lfanew
 
-    # e_lfanew at offset 0x3C
-    struct.pack_into('<I', out, 0x3C, pe_offset)
-
-    # PE header at pe_offset
+    # === PE header ===
     p = pe_offset
-    struct.pack_into('<I', out, p, 0x00004550)  # PE\0\0
-    p += 4
-    struct.pack_into('<H', out, p, 0x8664)  # Machine: AMD64
-    p += 2
-    num_sections = 1
-    struct.pack_into('<H', out, p, num_sections)
-    p += 2
+    struct.pack_into('<I', out, p, 0x00004550); p += 4  # PE\0\0
+    struct.pack_into('<H', out, p, 0x8664); p += 2      # AMD64
+    struct.pack_into('<H', out, p, len(segments)); p += 2  # num sections
     p += 4 + 4 + 4  # timestamp, symtab, numsym
-    opt_size = 112 + 0 * 8  # no data directories for minimal PE
-    struct.pack_into('<H', out, p, opt_size)
-    p += 2
-    struct.pack_into('<H', out, p, 0x0022)  # characteristics
-    p += 2
+    struct.pack_into('<H', out, p, opt_size); p += 2     # optional header size
+    struct.pack_into('<H', out, p, 0x0022); p += 2       # characteristics
 
-    # Optional header (PE32+)
-    opt_start = p
-    struct.pack_into('<H', out, p, 0x020B)  # PE32+
-    p += 2
+    # === Optional header (PE32+) ===
+    struct.pack_into('<H', out, p, 0x020B); p += 2       # PE32+
     p += 2  # linker version
-    struct.pack_into('<I', out, p, len(padded_elf))  # code size
-    p += 4
-    p += 4 + 4  # init data, uninit data
-    struct.pack_into('<I', out, p, entry_rva)  # entry point RVA
-    p += 4
-    struct.pack_into('<I', out, p, code_rva)  # base of code
-    p += 4
-    struct.pack_into('<Q', out, p, image_base)  # image base — match ELF vaddr!
-    p += 8
-    struct.pack_into('<I', out, p, sect_align)  # section alignment
-    p += 4
-    struct.pack_into('<I', out, p, file_align)  # file alignment
-    p += 4
-    struct.pack_into('<HH', out, p, 6, 0)  # OS version
-    p += 4
+    code_size = sum(s['filesz'] for s in segments if s['chars'] & 0x20)
+    struct.pack_into('<I', out, p, code_size); p += 4    # code size
+    data_size = sum(s['filesz'] for s in segments if not (s['chars'] & 0x20))
+    struct.pack_into('<I', out, p, data_size); p += 4    # initialized data
+    bss_size = sum(s['memsz'] - s['filesz'] for s in segments)
+    struct.pack_into('<I', out, p, bss_size); p += 4     # uninitialized data
+    struct.pack_into('<I', out, p, entry_rva); p += 4    # entry point RVA
+    code_rva = min(s['vaddr'] - image_base for s in segments if s['chars'] & 0x20) if code_size else 0
+    struct.pack_into('<I', out, p, code_rva); p += 4     # base of code
+    struct.pack_into('<Q', out, p, image_base); p += 8   # image base
+    struct.pack_into('<I', out, p, SECT_ALIGN); p += 4   # section alignment
+    struct.pack_into('<I', out, p, FILE_ALIGN); p += 4   # file alignment
+    struct.pack_into('<HH', out, p, 6, 0); p += 4        # OS version
     p += 4  # image version
-    struct.pack_into('<HH', out, p, 6, 0)  # subsystem version
-    p += 4
+    struct.pack_into('<HH', out, p, 6, 0); p += 4        # subsystem version
     p += 4  # win32 version
-    struct.pack_into('<I', out, p, image_size)
-    p += 4
-    struct.pack_into('<I', out, p, headers_size)
-    p += 4
+    struct.pack_into('<I', out, p, image_size); p += 4    # image size
+    struct.pack_into('<I', out, p, headers_size); p += 4  # headers size
     p += 4  # checksum
-    struct.pack_into('<H', out, p, 3)  # subsystem: CONSOLE
-    p += 2
-    struct.pack_into('<H', out, p, 0x8160)  # dll characteristics
-    p += 2
-    struct.pack_into('<Q', out, p, 0x100000)  # stack reserve
-    p += 8
-    struct.pack_into('<Q', out, p, 0x1000)  # stack commit
-    p += 8
-    struct.pack_into('<Q', out, p, 0x100000)  # heap reserve
-    p += 8
-    struct.pack_into('<Q', out, p, 0x1000)  # heap commit
-    p += 8
+    struct.pack_into('<H', out, p, 3); p += 2             # CONSOLE
+    struct.pack_into('<H', out, p, 0x8160); p += 2        # DLL characteristics
+    struct.pack_into('<Q', out, p, 0x100000); p += 8      # stack reserve
+    struct.pack_into('<Q', out, p, 0x1000); p += 8        # stack commit
+    struct.pack_into('<Q', out, p, 0x100000); p += 8      # heap reserve
+    struct.pack_into('<Q', out, p, 0x1000); p += 8        # heap commit
     p += 4  # loader flags
-    struct.pack_into('<I', out, p, 0)  # num data dirs
-    p += 4
+    struct.pack_into('<I', out, p, 0); p += 4             # num data dirs (0)
 
-    # Section table
-    out[p:p+8] = b'.text\0\0\0'
-    p += 8
-    struct.pack_into('<I', out, p, len(padded_elf))  # virtual size
-    p += 4
-    struct.pack_into('<I', out, p, code_rva)  # virtual address
-    p += 4
-    struct.pack_into('<I', out, p, len(padded_elf))  # raw size
-    p += 4
-    struct.pack_into('<I', out, p, headers_size + text_offset)  # raw pointer to .text in polyglot
-    p += 4
-    p += 4 + 4 + 2 + 2  # relocs, linenums
-    struct.pack_into('<I', out, p, 0x60000020)  # CODE|EXEC|READ
+    # === Section table ===
+    names_used = {}
+    for seg in segments:
+        rva = seg['vaddr'] - image_base
+        raw_ptr = elf_file_offset + seg['offset']
+        raw_size = align(seg['filesz'], FILE_ALIGN)
 
-    # Copy ELF data at headers_size
-    out[headers_size:headers_size + len(elf)] = elf
+        # Unique section name
+        name = seg['name']
+        if name in names_used:
+            names_used[name] += 1
+            name = name[:5] + str(names_used[name])
+        else:
+            names_used[name] = 0
 
-    # Write output
-    with open(out_path, 'wb') as f:
+        out[p:p+8] = (name + '\0' * 8)[:8].encode()
+        p += 8
+        struct.pack_into('<I', out, p, seg['memsz']); p += 4   # virtual size
+        struct.pack_into('<I', out, p, rva); p += 4             # virtual address
+        struct.pack_into('<I', out, p, raw_size); p += 4        # raw size
+        struct.pack_into('<I', out, p, raw_ptr); p += 4         # raw pointer
+        p += 4 + 4 + 2 + 2  # relocs, linenums
+        struct.pack_into('<I', out, p, seg['chars']); p += 4
+
+        print(f"  PE section '{name}': RVA=0x{rva:x} raw=0x{raw_ptr:x} size=0x{seg['filesz']:x} mem=0x{seg['memsz']:x}")
+
+    # === Copy ELF data ===
+    out[elf_file_offset:elf_file_offset + len(elf)] = elf
+
+    with open(sys.argv[2], 'wb') as f:
         f.write(out)
-    os.chmod(out_path, 0o755)
+    os.chmod(sys.argv[2], 0o755)
 
-    print(f"\nOutput: {out_path} ({len(out)} bytes = {len(out)/1024:.1f}KB)")
-    print(f"  MZ header: offset 0x000 (Windows PE loader)")
-    print(f"  PE header: offset 0x{pe_offset:03x}")
-    print(f"  Code:      offset 0x{headers_size:03x} ({len(elf)} bytes)")
-    print(f"  Entry RVA: 0x{entry_rva:x}")
-    print(f"  NOTE: On Linux, needs binfmt_misc for .com or use: ape-loader {out_path}")
+    print(f"\nOutput: {sys.argv[2]} ({len(out)} bytes = {len(out)/1024:.1f}KB)")
+    print(f"  MZ+PE at 0x000, ELF at 0x{elf_file_offset:x}")
+    print(f"  {len(segments)} sections mapped, entry RVA=0x{entry_rva:x}")
 
 if __name__ == '__main__':
     main()
