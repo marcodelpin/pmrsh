@@ -281,9 +281,11 @@ static void *find_module(const char *name) {
     void *head = (char*)ldr + 0x20;
     void *entry = *(void**)head;
     while (entry != head) {
-        /* Entry.BaseDllName at offset 0x40 (UNICODE_STRING: len, maxlen, buf) */
-        uint16_t *uname = *(uint16_t**)((char*)entry + 0x40 + 8);
-        uint16_t ulen = *(uint16_t*)((char*)entry + 0x40);
+        /* Entry.BaseDllName: offset 0x58 in LDR_DATA_TABLE_ENTRY,
+         * minus 0x10 for InMemoryOrderLinks = 0x48 from list entry.
+         * UNICODE_STRING: Length(2) + MaxLength(2) + pad(4) + Buffer(8) */
+        uint16_t *uname = *(uint16_t**)((char*)entry + 0x48 + 8);
+        uint16_t ulen = *(uint16_t*)((char*)entry + 0x48);
         /* Compare (case-insensitive, ASCII subset) */
         int match = 1;
         for (int i = 0; name[i]; i++) {
