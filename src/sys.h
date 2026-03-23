@@ -4,20 +4,30 @@
 #ifndef PMASH_SYS_H
 #define PMASH_SYS_H
 
-#ifdef _WIN32
+#if defined(__COSMOPOLITAN__)
+/* Cosmo provides all types via its headers */
+#elif defined(_WIN32)
 #include <stddef.h>  /* size_t from system */
 typedef long long ssize_t;
+typedef unsigned short uint16_t;
+typedef unsigned int   uint32_t;
+typedef unsigned long long uint64_t;
+typedef int            int32_t;
+typedef unsigned char  uint8_t;
 #else
 typedef unsigned long  size_t;
 typedef long           ssize_t;
-#endif
 typedef unsigned short uint16_t;
 typedef unsigned int   uint32_t;
 typedef unsigned long  uint64_t;
 typedef int            int32_t;
 typedef unsigned char  uint8_t;
+#endif
 
-#ifndef _WIN32
+#if defined(__COSMOPOLITAN__)
+/* APE: use Cosmopolitan POSIX layer */
+#include "sys_cosmo.h"
+#elif !defined(_WIN32)
 /* === Linux: Inline syscall wrappers === */
 
 static __attribute__((always_inline)) long
@@ -166,8 +176,8 @@ sys6(long nr, long a, long b, long c, long d, long e, long f) {
 #define DELTA_DATA      'D'
 #define DELTA_END       'E'
 
-/* === Network struct === */
-#ifndef _WIN32
+/* === Network struct (only for Linux no-libc build) === */
+#if !defined(_WIN32) && !defined(__COSMOPOLITAN__)
 struct sockaddr_in { uint16_t family; uint16_t port; uint32_t addr; uint64_t zero; };
 #endif
 
@@ -185,7 +195,7 @@ extern int srv_client;
 
 /* === I/O wrappers === */
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__COSMOPOLITAN__)
 
 static inline ssize_t io_write(int fd, const void *buf, size_t len) {
     return sys3(SYS_WRITE, fd, (long)buf, len);
@@ -235,9 +245,9 @@ static inline int net_accept(int fd) {
     return (int)sys3(SYS_ACCEPT, fd, 0, 0);
 }
 
-#else /* _WIN32 */
+#elif defined(_WIN32)
 #include "sys_win.h"
-#endif /* _WIN32 */
+#endif /* platform I/O */
 
 /* === Function declarations === */
 

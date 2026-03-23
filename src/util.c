@@ -38,7 +38,53 @@ int pm_atoi(const char *s) {
     return neg ? -r : r;
 }
 
-#ifdef _WIN32
+#if defined(__COSMOPOLITAN__)
+
+/* Cosmo: use POSIX API directly */
+int io_hostname(char *buf, int len) {
+    gethostname(buf, len);
+    return pm_strlen(buf);
+}
+
+void io_sleep_ms(int ms) {
+    usleep(ms * 1000);
+}
+
+int io_exec(const char *cmd, char *outbuf, int outbufsize) {
+    int pipefd[2];
+    if (pipe(pipefd) < 0) return -1;
+    pid_t pid = fork();
+    if (pid < 0) { close(pipefd[0]); close(pipefd[1]); return -1; }
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], 1);
+        dup2(pipefd[1], 2);
+        close(pipefd[1]);
+        const char *argv[] = { "/bin/sh", "-c", cmd, 0 };
+        execve("/bin/sh", (char**)argv, 0);
+        _exit(127);
+    }
+    close(pipefd[1]);
+    int total = 0;
+    struct pollfd pfd = { pipefd[0], POLLIN, 0 };
+    int timeout = 300;
+    while (timeout > 0) {
+        int pr = poll(&pfd, 1, 100);
+        if (pr > 0) {
+            int r = read(pipefd[0], outbuf + total, outbufsize - total);
+            if (r <= 0) break;
+            total += r;
+            timeout = 300;
+        } else timeout--;
+    }
+    if (timeout <= 0) kill(pid, SIGKILL);
+    close(pipefd[0]);
+    waitpid(pid, 0, 0);
+    outbuf[total] = 0;
+    return total;
+}
+
+#elif defined(_WIN32)
 
 int io_hostname(char *buf, int len) {
     DWORD sz = len;

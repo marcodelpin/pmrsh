@@ -20,7 +20,9 @@ OBJS = $(SRCS:.c=.o)
 BEARSSL_INC ?= $(HOME)/bearssl/inc
 BEARSSL_LIB ?= $(HOME)/bearssl/build/libbearssl.a
 
-.PHONY: all tls windows test clean
+COSMOCC ?= $(HOME)/cosmocc/bin/cosmocc
+
+.PHONY: all tls windows ape test clean
 
 all: pmash
 
@@ -46,6 +48,11 @@ windows:
 		-nostartfiles -Wl,--gc-sections -s \
 		-o pmash.exe $(SRCS) res/pmash.res -lws2_32 -lkernel32
 	@echo "Built: pmash.exe ($$(wc -c < pmash.exe) bytes)"
+
+# APE (Actually Portable Executable) — runs on Linux + Windows + Mac + BSD
+ape: clean
+	$(COSMOCC) -Os -s -Isrc -o pmash.com $(SRCS)
+	@echo "Built: pmash.com ($$(wc -c < pmash.com) bytes) [APE]"
 
 test: pmash
 	@./pmash --version

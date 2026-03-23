@@ -71,7 +71,18 @@ void mainCRTStartup(void) {
     pmash_run(argc, argv, home);
 }
 
-#else /* Linux */
+#elif defined(__COSMOPOLITAN__)
+
+/* Cosmopolitan: standard main() provided by cosmo libc */
+int main(int argc, char **argv) {
+    const char *home = getenv("HOME");
+    if (!home) home = getenv("USERPROFILE");
+    if (!home) home = "/tmp";
+    pmash_run(argc, argv, home);
+    return 0;
+}
+
+#else /* Linux (no libc) */
 
 __attribute__((used)) void pmash_main(long *stack);
 
