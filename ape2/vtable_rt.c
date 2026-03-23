@@ -462,17 +462,59 @@ static int win_exec(const char *cmd, char *outbuf, int outbufsize) {
  * OS DETECTION + VTABLE PATCHING
  * ======================================================================== */
 
-int detect_os(void) {
-    /* Linux getpid syscall (nr=39). Returns valid PID (>0) on Linux.
-     * On Windows, syscall instruction with Linux nr returns negative NTSTATUS.
-     * On Windows 10+, syscall doesn't crash — returns error status. */
-    long r = lx_syscall1(39/*SYS_GETPID*/, 0);
-    if (r > 0 && r < 0x100000) {
-        os_type = 1; /* Linux */
-        return 1;
+/* OS detection via dual entry points:
+ * ELF _start → sets os_type=1, calls pmash_main(stack)
+ * PE entry_pe → sets os_type=2, resolves APIs, builds argv, calls pmash_main
+ * No syscall instruction used for detection — the entry point IS the detection. */
+
+int detect_os(void) { return os_type; }
+
+/* PE entry point — Windows PE loader calls this (ms_abi convention).
+ * Must be visible to mkpolyglot.py for RVA calculation. */
+__attribute__((used, visibility("default")))
+void entry_pe(void) {
+    os_type = 2;
+    win_resolve_apis();
+    patch_vtable();
+
+    /* Build argc/argv from GetCommandLineA */
+    static char *argv[64];
+    static long stack[68]; /* [0]=argc, [1..]=argv ptrs, then NULL, then envp */
+    int argc = 0;
+
+    void* __attribute__((ms_abi)) (*pGetCmdLine)(void) =
+        find_export(win_kernel32, "GetCommandLineA");
+    if (pGetCmdLine) {
+        char *p = pGetCmdLine();
+        while (*p && argc < 63) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            if (*p == '"') { p++; argv[argc++] = p; while (*p && *p != '"') p++; }
+            else { argv[argc++] = p; while (*p && *p != ' ') p++; }
+            if (*p) *p++ = 0;
+        }
     }
-    os_type = 2; /* Windows */
-    return 2;
+    argv[argc] = 0;
+
+    /* Build USERPROFILE as HOME env var */
+    static char home_env[280] = "HOME=C:\\Users";
+    void* __attribute__((ms_abi)) (*pGetEnvVar)(const char*,char*,uint32_t) =
+        find_export(win_kernel32, "GetEnvironmentVariableA");
+    if (pGetEnvVar) {
+        pGetEnvVar("USERPROFILE", home_env + 5, 260);
+    }
+    static char *envp[2];
+    envp[0] = home_env;
+    envp[1] = 0;
+
+    /* Pack into Linux-style stack: [argc][argv0][argv1]...[NULL][envp0][NULL] */
+    stack[0] = argc;
+    for (int i = 0; i <= argc; i++) stack[1 + i] = (long)argv[i];
+    stack[1 + argc + 1] = (long)envp[0];
+    stack[1 + argc + 2] = 0;
+
+    pmash_main(stack);
+    vt.exit_(0);
 }
 
 void patch_vtable(void) {

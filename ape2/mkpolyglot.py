@@ -27,6 +27,21 @@ def main():
     phnum = struct.unpack('<H', elf[56:58])[0]
     phsize = struct.unpack('<H', elf[54:56])[0]
 
+    # Find entry_pe symbol for PE entry point (different from ELF _start)
+    # Use nm on the unstripped binary, or pass as argument
+    pe_entry = entry  # default: same as ELF entry
+    import subprocess
+    try:
+        nm_out = subprocess.check_output(['nm', sys.argv[1]], stderr=subprocess.DEVNULL).decode()
+        for line in nm_out.splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[2] == 'entry_pe':
+                pe_entry = int(parts[0], 16)
+                print(f"  entry_pe symbol at 0x{pe_entry:x}")
+                break
+    except:
+        pass
+
     # Parse ALL LOAD segments
     segments = []
     for i in range(phnum):
@@ -67,8 +82,9 @@ def main():
     if segments[0]['vaddr'] == image_base and segments[0]['filesz'] < 0x1000:
         print(f"  Skipping first LOAD (ELF headers at base, RVA=0)")
         segments = segments[1:]
-    entry_rva = entry - image_base
-    print(f"\nELF: {len(elf)} bytes, entry=0x{entry:x}, image_base=0x{image_base:x}, entry_rva=0x{entry_rva:x}")
+    entry_rva = pe_entry - image_base  # PE uses entry_pe, not ELF _start
+    print(f"\nELF: {len(elf)} bytes, entry=0x{entry:x}, pe_entry=0x{pe_entry:x}")
+    print(f"  image_base=0x{image_base:x}, PE entry_rva=0x{entry_rva:x}")
     print(f"  {len(segments)} LOAD segments")
 
     FILE_ALIGN = 512

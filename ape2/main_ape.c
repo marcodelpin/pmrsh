@@ -6,18 +6,20 @@
                 "       pmash --listen <port>\n" \
                 "       pmash --version\n"
 
-/* Entry point — when linked standalone, _start is here.
- * When linked with polyglot.S, polyglot provides _start and calls pmash_main. */
+/* ELF entry: _start → elf_entry_trampoline → pmash_main
+ * PE entry: entry_pe() in vtable_rt.c → pmash_main */
 #ifndef POLYGLOT_HEADER
+void elf_entry_trampoline(long *stack) {
+    os_type = 1; /* Linux */
+    patch_vtable();
+    pmash_main(stack);
+}
 __attribute__((naked)) void _start(void) {
-    __asm__("mov %rsp, %rdi\n\tjmp pmash_main");
+    __asm__("mov %rsp, %rdi\n\tjmp elf_entry_trampoline");
 }
 #endif
 
 void pmash_main(long *stack) {
-    /* Init OS detection + vtable */
-    detect_os();
-    patch_vtable();
 
     int argc = (int)stack[0];
     char **argv = (char**)(stack + 1);
